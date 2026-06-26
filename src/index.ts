@@ -559,46 +559,29 @@ export const NvidiaNimKeyRotator: Plugin = async (
     },
     "chat.headers": async (_input, _output) => {
       const providerId = _input?.provider?.info?.id;
-      const modelId = _input.model?.id;
       const modelApi = (_input.model as Record<string, unknown>)?.api;
       const modelProviderId = _input.model?.providerID;
-      const providerInfo = JSON.stringify(_input?.provider ?? "NO_PROVIDER");
-      console.debug(
-        `[nimsuper] chat.headers called: provider="${providerId}", model="${modelId ?? "undefined"}", api="${JSON.stringify(modelApi)}", modelProviderID="${modelProviderId ?? "undefined"}", provider=${providerInfo}`,
-      );
       const modelApiStr =
         typeof modelApi === "string"
           ? modelApi
           : modelApi && typeof modelApi === "object"
             ? ((modelApi as Record<string, unknown>)?.url as string) ?? ""
             : "";
-      const isNvidiaApi = modelApiStr.includes("nvidia.com");
-      const isNvidiaProvider =
+      const isNvidia =
+        modelApiStr.includes("nvidia.com") ||
         !!(providerId && providerId.toLowerCase().includes("nvidia")) ||
         !!(modelProviderId && modelProviderId.toLowerCase().includes("nvidia"));
-      if (!isNvidiaApi && !isNvidiaProvider) {
-        console.debug(
-          `[nimsuper] chat.headers skipped: not an NVIDIA request (api="${modelApi}", provider="${providerId}", modelProviderID="${modelProviderId}")`,
-        );
-        return;
-      }
+      if (!isNvidia) return;
       reloadFromDisk();
       const prevKeyId = store.lastUsedKeyId;
       const modelIdForRotation = _input.model?.id;
       const next = getNextKey(store, config, modelIdForRotation);
       if (next) {
         _output.headers["Authorization"] = `Bearer ${next.key.key}`;
-        console.debug(
-          `[nimsuper] Injected Authorization header for key "${next.key.name}" (id=${next.key.id})`,
-        );
         if (prevKeyId && prevKeyId !== next.key.id) {
           resetRateLimit(store, prevKeyId);
         }
         safeSaveStore();
-      } else {
-        console.debug(
-          `[nimsuper] chat.headers: no active key available for model "${modelIdForRotation ?? "any"}"`,
-        );
       }
       if (modelIdForRotation && _input.sessionID) {
         const state = getState(_input.sessionID);
@@ -611,14 +594,9 @@ export const NvidiaNimKeyRotator: Plugin = async (
       const inChain =
         reqModel &&
         findChainIndex(store.fallbackChain, reqModel) >= 0;
-      const isNvidiaProvider =
+      const isNvidia =
         typeof reqProviderId === "string" && reqProviderId.toLowerCase().includes("nvidia");
-      if (!inChain && !isNvidiaProvider) {
-        console.debug(
-          `[nimsuper] chat.message skipped: model not in chain, provider="${reqProviderId}"`,
-        );
-        return;
-      }
+      if (!inChain && !isNvidia) return;
       const chain = store.fallbackChain;
       if (chain.length === 0) return;
 
@@ -676,9 +654,6 @@ export const NvidiaNimKeyRotator: Plugin = async (
         if (next) {
           output.env.NVIDIA_API_KEY = next.key.key;
           safeSaveStore();
-          console.debug(
-            `[nimsuper] Injected rotated key into shell env: "${next.key.name}"`,
-          );
         }
       }
     },

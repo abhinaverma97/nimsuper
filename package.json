@@ -1,6 +1,6 @@
 {
   "name": "nimsuper",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "NVIDIA NIM API key rotator plugin for OpenCode — with auto-fallback across models",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
