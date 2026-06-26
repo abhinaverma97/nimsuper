@@ -1,5 +1,5 @@
 import { Box, Text } from "@opentui/core";
-import pkg from "../../package.json";
+import pkg from "../../package.json" with { type: "json" };
 import { getActiveKeys } from "../storage.js";
 import { getActiveTheme, setPreviewTheme } from "../themes.js";
 import { state, setNavigate, setRenderApp, callRenderApp } from "./state.js";

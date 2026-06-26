@@ -21,7 +21,7 @@ const DEFAULT_STORE_PATH = join(
   homedir(),
   ".config",
   "opencode",
-  "nim-rotator-keys.json",
+  "nimsuper-keys.json",
 );
 export const MODEL_BLACKLIST_BASE_DURATION_MS = 30_000;
 export const MODEL_BLACKLIST_MAX_DURATION_MS = 60 * 60 * 1000;
@@ -48,7 +48,7 @@ export function getDefaultStore(): KeyStore {
 export function resolveStorePath(config?: KeyStoreConfig): string {
   return (
     config?.storePath ??
-    process.env.NIM_ROTATOR_STORE_PATH ??
+    process.env.NIMSUPER_STORE_PATH ??
     DEFAULT_STORE_PATH
   );
 }
@@ -71,14 +71,14 @@ export function loadStore(config?: KeyStoreConfig): KeyStore | null {
       const data = JSON.parse(raw);
       if (typeof data !== "object" || data === null) {
         console.warn(
-          `[nim-rotator] Store at "${storePath}" is not a valid object`,
+          `[nimsuper] Store at "${storePath}" is not a valid object`,
         );
         return null;
       }
       const store = data as KeyStore;
       if (!store.keys || !Array.isArray(store.keys)) {
         console.warn(
-          `[nim-rotator] Store at "${storePath}" has invalid keys format`,
+          `[nimsuper] Store at "${storePath}" has invalid keys format`,
         );
         return null;
       }
@@ -125,7 +125,7 @@ export function loadStore(config?: KeyStoreConfig): KeyStore | null {
       return built;
     }
   } catch (err) {
-    console.error(`[nim-rotator] Failed to load store at "${storePath}":`, err);
+    console.error(`[nimsuper] Failed to load store at "${storePath}":`, err);
   }
   return null;
 }
@@ -150,7 +150,7 @@ export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
       unlinkSync(tmpPath);
     } catch (cleanupErr) {
       console.debug(
-        `[nim-rotator] Failed to clean up tmp file ${tmpPath}:`,
+        `[nimsuper] Failed to clean up tmp file ${tmpPath}:`,
         cleanupErr,
       );
     }
@@ -376,7 +376,7 @@ export function writeExportFile(
       unlinkSync(tmpPath);
     } catch (cleanupErr) {
       console.debug(
-        `[nim-rotator] Failed to clean up tmp file ${tmpPath}:`,
+        `[nimsuper] Failed to clean up tmp file ${tmpPath}:`,
         cleanupErr,
       );
     }
@@ -398,7 +398,7 @@ export function readAndValidateImportFile(
   try {
     raw = readFileSync(resolved, "utf-8");
   } catch (err) {
-    console.debug(`[nim-rotator] Cannot read import file ${resolved}:`, err);
+    console.debug(`[nimsuper] Cannot read import file ${resolved}:`, err);
     return { error: "Cannot read file" };
   }
   return { raw };
@@ -430,7 +430,7 @@ export function validateImportPayload(raw: string): ImportResult {
   try {
     data = JSON.parse(raw);
   } catch (err) {
-    console.debug("[nim-rotator] Import file invalid JSON:", err);
+    console.debug("[nimsuper] Import file invalid JSON:", err);
     result.errors.push("Invalid JSON format");
     return result;
   }

@@ -457,7 +457,7 @@ export function getResolvedTheme(): RotatorTheme {
   return themes["opencode"]!;
 }
 
-const THEME_OVERRIDE_PATH = join(CONFIG_DIR, "nim-rotator-theme.json");
+const THEME_OVERRIDE_PATH = join(CONFIG_DIR, "nimsuper-theme.json");
 
 export function getThemeOverride(): string | null {
   try {
@@ -482,7 +482,7 @@ export function saveThemeOverride(themeId: string): void {
     });
     renameSync(tmpPath, THEME_OVERRIDE_PATH);
   } catch (err) {
-    console.warn("[nim-rotator] Could not save theme preference:", err);
+    console.warn("[nimsuper] Could not save theme preference:", err);
   }
 }
 

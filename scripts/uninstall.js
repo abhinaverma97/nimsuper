@@ -7,14 +7,14 @@ import { readFile, writeFile, unlink } from "fs/promises";
 
 const CONFIG_DIR = join(homedir(), ".config", "opencode");
 const CONFIG_PATH = join(CONFIG_DIR, "opencode.json");
-const KEYSTORE_PATH = join(CONFIG_DIR, "nim-rotator-keys.json");
-const THEME_PATH = join(CONFIG_DIR, "nim-rotator-theme.json");
+const KEYSTORE_PATH = join(CONFIG_DIR, "nimsuper-keys.json");
+const THEME_PATH = join(CONFIG_DIR, "nimsuper-theme.json");
 
 async function uninstall() {
   console.log(
     "\n+=============================================================+",
   );
-  console.log("|  NVIDIA NIM API Key Rotator - Uninstaller                  |");
+  console.log("|  nimsuper - Uninstaller                                    |");
   console.log(
     "+=============================================================+\n",
   );
@@ -30,8 +30,8 @@ async function uninstall() {
       if (Array.isArray(config.plugin)) {
         const beforeLength = config.plugin.length;
         config.plugin = config.plugin.filter(function (p) {
-          if (typeof p === "string") return p !== "opencode-nim-rotator";
-          if (Array.isArray(p)) return p[0] !== "opencode-nim-rotator";
+          if (typeof p === "string") return p !== "nimsuper";
+          if (Array.isArray(p)) return p[0] !== "nimsuper";
           return true;
         });
 
@@ -40,7 +40,7 @@ async function uninstall() {
             mode: 0o600,
           });
           console.log(
-            "Removed opencode-nim-rotator from opencode.json plugin list",
+            "Removed nimsuper from opencode.json plugin list",
           );
           configModified = true;
         } else {

@@ -12,7 +12,7 @@ async function install() {
   console.log(
     "\n+=============================================================+",
   );
-  console.log("|  NVIDIA NIM API Key Rotator - Installer                    |");
+  console.log("|  nimsuper - Installer                                      |");
   console.log(
     "+=============================================================+\n",
   );
@@ -30,17 +30,17 @@ async function install() {
 
       config.plugin = config.plugin || [];
       const hasPlugin = config.plugin.some(function (p) {
-        if (typeof p === "string") return p === "opencode-nim-rotator";
-        if (Array.isArray(p)) return p[0] === "opencode-nim-rotator";
+        if (typeof p === "string") return p === "nimsuper";
+        if (Array.isArray(p)) return p[0] === "nimsuper";
         return false;
       });
 
       if (!hasPlugin) {
-        config.plugin.push("opencode-nim-rotator");
+        config.plugin.push("nimsuper");
         await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", {
           mode: 0o600,
         });
-        console.log("Added opencode-nim-rotator to opencode.json plugin list");
+        console.log("Added nimsuper to opencode.json plugin list");
       } else {
         console.log("Plugin already in opencode.json - skipping");
       }
@@ -48,7 +48,7 @@ async function install() {
       console.warn("Could not update opencode.json:", err);
     }
   } else {
-    const config = { plugin: ["opencode-nim-rotator"] };
+    const config = { plugin: ["nimsuper"] };
     await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", {
       mode: 0o600,
     });
@@ -56,7 +56,7 @@ async function install() {
   }
 
   console.log("\nNext steps:");
-  console.log("  1. Run: bun opencode-nim-rotator  (to manage your API keys)");
+  console.log("  1. Run: bun nimsuper  (to manage your API keys)");
   console.log("  2. Add at least one NVIDIA NIM API key via the TUI");
   console.log(
     "  3. Restart opencode - the plugin will auto-rotate your keys\n",

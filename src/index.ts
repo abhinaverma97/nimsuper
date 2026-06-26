@@ -52,7 +52,7 @@ async function isSubagentSession(
     return (data as Record<string, unknown>)?.parentID !== undefined;
   } catch (err) {
     console.debug(
-      `[nim-rotator] isSubagentSession failed for ${sessionID}:`,
+      `[nimsuper] isSubagentSession failed for ${sessionID}:`,
       err,
     );
     return false;
@@ -121,7 +121,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
     try {
       fresh = loadStore(config);
     } catch (err) {
-      console.debug("[nim-rotator] Failed to reload store from disk:", err);
+      console.debug("[nimsuper] Failed to reload store from disk:", err);
       return;
     }
     if (fresh === null) return;
@@ -141,7 +141,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
           ? fresh.maxRateLimitFailures
           : getDefaultStore().maxRateLimitFailures;
     } catch (err) {
-      console.debug("[nim-rotator] Failed to apply reloaded store:", err);
+      console.debug("[nimsuper] Failed to apply reloaded store:", err);
     }
   };
 
@@ -149,7 +149,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
     try {
       saveStore(store, config);
     } catch (err) {
-      console.error("[nim-rotator] Failed to save store:", err);
+      console.error("[nimsuper] Failed to save store:", err);
     }
   };
 
@@ -175,7 +175,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
         body: { title: "Model Fallback", message, variant },
       });
     } catch (err) {
-      console.debug("[nim-rotator] showToast failed:", err);
+      console.debug("[nimsuper] showToast failed:", err);
     }
   };
 
@@ -251,7 +251,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
     console.debug(
-      `[nim-rotator] waitForSessionIdle timed out for ${sessionID}`,
+      `[nimsuper] waitForSessionIdle timed out for ${sessionID}`,
     );
     return false;
   };
@@ -338,13 +338,13 @@ export const NvidiaNimKeyRotator: Plugin = async (
       try {
         await client.session.abort({ path: { id: sessionID } });
       } catch (abortErr) {
-        console.debug(`[nim-rotator] abort failed for ${sessionID}:`, abortErr);
+        console.debug(`[nimsuper] abort failed for ${sessionID}:`, abortErr);
       }
 
       const idle = await waitForSessionIdle(sessionID);
       if (!idle) {
         console.debug(
-          `[nim-rotator] session ${sessionID} did not go idle after abort`,
+          `[nimsuper] session ${sessionID} did not go idle after abort`,
         );
         state.pendingRetryIndex = undefined;
         return false;
@@ -365,7 +365,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
 
       return true;
     } catch (err) {
-      console.debug(`[nim-rotator] triggerRetry failed for ${sessionID}:`, err);
+      console.debug(`[nimsuper] triggerRetry failed for ${sessionID}:`, err);
       state.pendingRetryIndex = undefined;
       return false;
     } finally {
@@ -543,7 +543,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
               });
               if (!res.ok) return { type: "failed" };
             } catch (err) {
-              console.debug("[nim-rotator] authorize fetch failed:", err);
+              console.debug("[nimsuper] authorize fetch failed:", err);
               return { type: "failed" };
             }
 
@@ -557,6 +557,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
       ],
     },
     "chat.headers": async (_input, _output) => {
+      if (_input?.provider?.info?.id !== PROVIDER_ID) return;
       reloadFromDisk();
       const prevKeyId = store.lastUsedKeyId;
       const modelIdForRotation = _input.model?.id;
@@ -574,6 +575,8 @@ export const NvidiaNimKeyRotator: Plugin = async (
       }
     },
     "chat.message": async (input, output) => {
+      const reqModel = output.message.model ?? input.model;
+      if (reqModel?.providerID !== PROVIDER_ID) return;
       const chain = store.fallbackChain;
       if (chain.length === 0) return;
 

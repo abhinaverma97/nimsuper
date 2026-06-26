@@ -107,7 +107,7 @@ export function handleExport(filePath: string): void {
     );
     navigate("list");
   } catch (err) {
-    console.error("[nim-rotator] Export failed:", err);
+    console.error("[nimsuper] Export failed:", err);
     setStatus(`Export failed: check file path and permissions`, theme.error);
     callRenderApp();
   }
@@ -264,7 +264,7 @@ export async function fetchNimModels(): Promise<void> {
       name: m.name ?? m.id,
     }));
   } catch (err) {
-    console.error("[nim-rotator] Failed to fetch models:", err);
+    console.error("[nimsuper] Failed to fetch models:", err);
     setStatus("Failed to fetch models from NVIDIA NIM", "#FF5555");
   }
 }

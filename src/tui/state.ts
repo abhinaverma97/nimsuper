@@ -101,7 +101,7 @@ export function safeSaveStore(): boolean {
     saveStore(state.store);
     return true;
   } catch (err) {
-    console.error("[nim-rotator] Save failed:", err);
+    console.error("[nimsuper] Save failed:", err);
     setStatus(
       "Save failed: " + (err instanceof Error ? err.message : "Unknown error"),
       getActiveTheme().error,
