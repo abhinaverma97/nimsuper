@@ -560,15 +560,25 @@ export const NvidiaNimKeyRotator: Plugin = async (
     "chat.headers": async (_input, _output) => {
       const providerId = _input?.provider?.info?.id;
       const modelId = _input.model?.id;
+      const modelApi = (_input.model as Record<string, unknown>)?.api;
+      const modelProviderId = _input.model?.providerID;
+      const providerInfo = JSON.stringify(_input?.provider ?? "NO_PROVIDER");
       console.debug(
-        `[nimsuper] chat.headers called: provider="${providerId}", model="${modelId ?? "undefined"}"`,
+        `[nimsuper] chat.headers called: provider="${providerId}", model="${modelId ?? "undefined"}", api="${JSON.stringify(modelApi)}", modelProviderID="${modelProviderId ?? "undefined"}", provider=${providerInfo}`,
       );
-      if (
-        !providerId ||
-        !providerId.toLowerCase().includes("nvidia")
-      ) {
+      const modelApiStr =
+        typeof modelApi === "string"
+          ? modelApi
+          : modelApi && typeof modelApi === "object"
+            ? ((modelApi as Record<string, unknown>)?.url as string) ?? ""
+            : "";
+      const isNvidiaApi = modelApiStr.includes("nvidia.com");
+      const isNvidiaProvider =
+        !!(providerId && providerId.toLowerCase().includes("nvidia")) ||
+        !!(modelProviderId && modelProviderId.toLowerCase().includes("nvidia"));
+      if (!isNvidiaApi && !isNvidiaProvider) {
         console.debug(
-          `[nimsuper] chat.headers skipped: provider="${providerId}" does not match "nvidia"`,
+          `[nimsuper] chat.headers skipped: not an NVIDIA request (api="${modelApi}", provider="${providerId}", modelProviderID="${modelProviderId}")`,
         );
         return;
       }
@@ -601,11 +611,9 @@ export const NvidiaNimKeyRotator: Plugin = async (
       const inChain =
         reqModel &&
         findChainIndex(store.fallbackChain, reqModel) >= 0;
-      if (
-        !inChain &&
-        (!reqProviderId ||
-          !reqProviderId.toLowerCase().includes("nvidia"))
-      ) {
+      const isNvidiaProvider =
+        typeof reqProviderId === "string" && reqProviderId.toLowerCase().includes("nvidia");
+      if (!inChain && !isNvidiaProvider) {
         console.debug(
           `[nimsuper] chat.message skipped: model not in chain, provider="${reqProviderId}"`,
         );
