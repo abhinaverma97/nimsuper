@@ -11,6 +11,7 @@ export interface SessionState {
   lastFailedModelId: string | undefined;
   lastErrorHandledAt: number;
   createdAt: number;
+  sessionProviderId: string | undefined;
 }
 
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);

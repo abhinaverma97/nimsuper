@@ -23,6 +23,7 @@ function makeState(
     lastFailedModelId: undefined,
     lastErrorHandledAt: 0,
     createdAt: 0,
+    sessionProviderId: undefined,
     ...overrides,
   };
 }
