@@ -1,13 +1,18 @@
-import type { KeyStore } from "../types.js";
+import type { KeyStore, ProviderId } from "../types.js";
 import type { ImportResult } from "../storage.js";
 import { loadStore, getDefaultStore, saveStore } from "../storage.js";
 import { getActiveTheme } from "../themes.js";
-import type { Screen } from "./types.js";
+import type { Screen, ActiveTab } from "./types.js";
 import type { CliRenderer } from "@opentui/core";
+import type { BenchmarkRunner } from "./benchmark.js";
+
+type ProviderRecord<T> = Record<ProviderId, T>;
 
 export const state: {
   store: KeyStore;
   currentScreen: Screen;
+  activeProvider: ProviderId;
+  activeTab: ActiveTab;
   deleteTargetId: string | null;
   renameTargetId: string | null;
   pendingKeyName: string;
@@ -24,19 +29,20 @@ export const state: {
   isRendering: boolean;
   renderPending: boolean;
   renderer: CliRenderer | null;
-  activeTab: "keys" | "fallback";
-  fallbackChainIndex: number;
-  fallbackChainScrollOffset: number;
+  fallbackChainIndex: ProviderRecord<number>;
+  fallbackChainScrollOffset: ProviderRecord<number>;
   fallbackSettingsIndex: number;
-  modelSelectorIndex: number;
-  modelSelectorScrollOffset: number;
+  modelSelectorIndex: ProviderRecord<number>;
+  modelSelectorScrollOffset: ProviderRecord<number>;
   modelSearchQuery: string;
-  availableModels: { id: string; name: string }[];
-  modelsLoaded: boolean;
-  benchmarkRunners: Map<string, import("./benchmark.js").BenchmarkRunner>;
+  availableModels: ProviderRecord<{ id: string; name: string }[]>;
+  modelsLoaded: ProviderRecord<boolean>;
+  benchmarkRunners: Map<string, BenchmarkRunner>;
 } = {
   store: loadStore() ?? getDefaultStore(),
-  currentScreen: "list",
+  currentScreen: "provider-tabs",
+  activeProvider: "nvidia",
+  activeTab: "keys",
   deleteTargetId: null,
   renameTargetId: null,
   pendingKeyName: "",
@@ -53,15 +59,14 @@ export const state: {
   isRendering: false,
   renderPending: false,
   renderer: null,
-  activeTab: "keys",
-  fallbackChainIndex: 0,
-  fallbackChainScrollOffset: 0,
+  fallbackChainIndex: { nvidia: 0, google: 0 },
+  fallbackChainScrollOffset: { nvidia: 0, google: 0 },
   fallbackSettingsIndex: 0,
-  modelSelectorIndex: 0,
-  modelSelectorScrollOffset: 0,
+  modelSelectorIndex: { nvidia: 0, google: 0 },
+  modelSelectorScrollOffset: { nvidia: 0, google: 0 },
   modelSearchQuery: "",
-  availableModels: [],
-  modelsLoaded: false,
+  availableModels: { nvidia: [], google: [] },
+  modelsLoaded: { nvidia: false, google: false },
   benchmarkRunners: new Map(),
 };
 
@@ -115,4 +120,8 @@ export function clampIndex(index: number, length: number): number {
   if (length <= 0) return 0;
   if (index < 0) return 0;
   return index >= length ? Math.max(0, length - 1) : index;
+}
+
+export function getActiveKeysForProvider(provider: ProviderId): KeyStore["keys"] {
+  return state.store.keys.filter((k) => k.provider === provider && k.enabled);
 }

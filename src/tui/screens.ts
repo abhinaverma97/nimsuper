@@ -1,40 +1,12 @@
 import { join } from "path";
 import { homedir } from "os";
 import { Box, Text } from "@opentui/core";
-import {
-  getActiveTheme,
-  getTheme,
-  getResolvedTheme,
-  getThemeOverride,
-  listThemes,
-  saveThemeOverride,
-  setPreviewTheme,
-  dangerSelectColors,
-} from "../themes.js";
-import {
-  addKey,
-  readAndValidateImportFile,
-  validateImportPayload,
-  removeKey,
-  renameKey,
-} from "../storage.js";
-import {
-  state,
-  navigate,
-  callRenderApp,
-  refreshStore,
-  setStatus,
-  clampIndex,
-  safeSaveStore,
-} from "./state.js";
-import {
-  themedSelect,
-  themedInput,
-  events,
-  maskKey,
-  applyThemeToScreen,
-} from "./ui.js";
-import type { ScreenContent, SelectOption } from "./types.js";
+import pkg from "../../package.json" with { type: "json" };
+import { getActiveTheme, getTheme, getResolvedTheme, listThemes, saveThemeOverride, setPreviewTheme, dangerSelectColors, getThemeOverride } from "../themes.js";
+import { addKey, readAndValidateImportFile, validateImportPayload, removeKey, renameKey, getActiveKeys } from "../storage.js";
+import { state, navigate, callRenderApp, refreshStore, setStatus, clampIndex, safeSaveStore } from "./state.js";
+import { themedSelect, themedInput, events, maskKey, applyThemeToScreen } from "./ui.js";
+import type { ScreenContent, SelectOption, ProviderId, ActiveTab } from "./types.js";
 import {
   handleMenuSelect,
   handleKeyAction,
@@ -42,21 +14,87 @@ import {
   handleImportConfirm,
   handleFallbackChainKey,
   handleFallbackMenuSelect,
-  fetchNimModels,
+  fetchModels,
   addFallbackModel,
+  cancelBenchmark,
+  startBenchmark,
 } from "./actions.js";
 
 function keyStatus(entry: { enabled: boolean }): string {
   return !entry.enabled ? "OFF" : "OK";
 }
 
+function getProviderDisplayName(provider: ProviderId): string {
+  return provider === "nvidia" ? "NVIDIA NIM" : "Google Gemini";
+}
+
+function getProviderShortName(provider: ProviderId): string {
+  return provider === "nvidia" ? "NVIDIA" : "Gemini";
+}
+
 // ---------------------------------------------------------------------------
-// Main Menu
+// Provider Tabs Screen
+// ---------------------------------------------------------------------------
+
+export function buildProviderTabs(): ScreenContent {
+  const theme = getActiveTheme();
+  const options: SelectOption[] = [
+    {
+      name: "[1] NVIDIA NIM",
+      description: "Manage NVIDIA NIM API keys and fallback models",
+      value: "nvidia",
+    },
+    {
+      name: "[2] Google Gemini",
+      description: "Manage Google Gemini API keys and fallback models",
+      value: "google",
+    },
+    { name: "Quit", description: "Exit the key manager", value: "quit" },
+  ];
+
+  state.mainMenuIndex = clampIndex(state.mainMenuIndex, options.length);
+
+  const menu = themedSelect(
+    "provider-tabs",
+    56,
+    10,
+    options,
+    state.mainMenuIndex,
+    (idx, opt) => {
+      state.mainMenuIndex = idx;
+      handleProviderTabSelect(opt.value);
+    },
+  );
+
+  return {
+    element: Box(
+      { flexDirection: "column", gap: 1 },
+      Text({ content: " Select a provider:", fg: theme.primary }),
+      menu,
+    ),
+    helpText: "[Ctrl+C] quit",
+  };
+}
+
+function handleProviderTabSelect(value: string): void {
+  if (value === "quit") {
+    if (state.renderer) state.renderer.destroy();
+    process.exit(0);
+  }
+  state.activeProvider = value as ProviderId;
+  state.activeTab = "keys";
+  navigate("list");
+}
+
+// ---------------------------------------------------------------------------
+// Main Menu (per provider)
 // ---------------------------------------------------------------------------
 
 export function buildMainMenu(): ScreenContent {
   const { store } = state;
-  const hasKeys = store.keys.length > 0;
+  const provider = state.activeProvider;
+  const providerKeys = store.keys.filter((k) => k.provider === provider);
+  const hasKeys = providerKeys.length > 0;
   const theme = getActiveTheme();
   const override = getThemeOverride();
 
@@ -68,7 +106,7 @@ export function buildMainMenu(): ScreenContent {
     },
     {
       name: "Add Key",
-      description: "Add a new NVIDIA NIM API key",
+      description: `Add a new ${getProviderDisplayName(provider)} API key`,
       value: "add",
     },
     hasKeys && {
@@ -96,7 +134,7 @@ export function buildMainMenu(): ScreenContent {
       description: "Change the color theme",
       value: "theme",
     },
-    { name: "Quit", description: "Exit the key manager", value: "quit" },
+    { name: "Back", description: "Return to provider selection", value: "back" },
   ];
   const options = opts.filter(Boolean) as SelectOption[];
 
@@ -114,7 +152,15 @@ export function buildMainMenu(): ScreenContent {
     },
   );
 
-  return { element: menu, helpText: "[Ctrl+C] quit" };
+  const providerName = getProviderDisplayName(provider);
+  return {
+    element: Box(
+      { flexDirection: "column", gap: 1 },
+      Text({ content: ` ${providerName} Key Manager`, fg: theme.primary }),
+      menu,
+    ),
+    helpText: "[Esc] back  [Ctrl+C] quit",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +168,10 @@ export function buildMainMenu(): ScreenContent {
 // ---------------------------------------------------------------------------
 
 export function buildKeySelector(): ScreenContent {
-  const options: SelectOption[] = state.store.keys.map((entry) => ({
+  const provider = state.activeProvider;
+  const providerKeys = state.store.keys.filter((k) => k.provider === provider);
+
+  const options: SelectOption[] = providerKeys.map((entry) => ({
     name: `${entry.name} [${keyStatus(entry)}]`,
     description: `${maskKey(entry.key)} rl:${entry.rateLimitCount} ${entry.lastUsedAt ? new Date(entry.lastUsedAt).toLocaleString() : "never used"}`,
     value: entry.id,
@@ -152,10 +201,7 @@ export function buildKeySelector(): ScreenContent {
   return {
     element: Box(
       { flexDirection: "column", gap: 1 },
-      Text({
-        content: " Select a key to manage:",
-        fg: getActiveTheme().primary,
-      }),
+      Text({ content: " Select a key to manage:", fg: getActiveTheme().primary }),
       selector,
     ),
     helpText: "[Esc] back",
@@ -186,16 +232,8 @@ export function buildKeyActions(): ScreenContent {
       description: `${entry.enabled ? "Disable" : "Enable"} this key`,
       value: "toggle",
     },
-    {
-      name: "Rename",
-      description: "Change the friendly name",
-      value: "rename",
-    },
-    {
-      name: "Delete",
-      description: "Remove this key permanently",
-      value: "delete",
-    },
+    { name: "Rename", description: "Change the friendly name", value: "rename" },
+    { name: "Delete", description: "Remove this key permanently", value: "delete" },
     { name: "Back", description: "Return to key list", value: "back" },
   ];
 
@@ -216,10 +254,7 @@ export function buildKeyActions(): ScreenContent {
   return {
     element: Box(
       { flexDirection: "column", gap: 1 },
-      Text({
-        content: ` Key: ${entry.name} (${maskKey(entry.key)})`,
-        fg: getActiveTheme().primary,
-      }),
+      Text({ content: ` Key: ${entry.name} (${maskKey(entry.key)})`, fg: getActiveTheme().primary }),
       actions,
     ),
     helpText: "[Esc] back",
@@ -280,8 +315,7 @@ export function buildThemeSelector(): ScreenContent {
     state.themeSelectorIndex = index;
     const option = options[index];
     if (!option) return;
-    const previewId =
-      option.value === "sync" ? getResolvedTheme().id : option.value;
+    const previewId = option.value === "sync" ? getResolvedTheme().id : option.value;
     setPreviewTheme(previewId);
     applyThemeToScreen(getTheme(previewId));
   });
@@ -289,11 +323,7 @@ export function buildThemeSelector(): ScreenContent {
   return {
     element: Box(
       { flexDirection: "column", gap: 1 },
-      Text({
-        id: "theme-label",
-        content: " Select a theme:",
-        fg: theme.primary,
-      }),
+      Text({ id: "theme-label", content: " Select a theme:", fg: theme.primary }),
       selector,
     ),
     helpText: "[Esc] back  [Enter] apply",
@@ -309,11 +339,7 @@ export function buildConfirmDelete(): ScreenContent {
   const name = entry?.name ?? "this key";
 
   const options: SelectOption[] = [
-    {
-      name: "Yes, delete",
-      description: `Permanently remove "${name}"`,
-      value: "yes",
-    },
+    { name: "Yes, delete", description: `Permanently remove "${name}"`, value: "yes" },
     { name: "No, cancel", description: "Keep the key", value: "no" },
   ];
 
@@ -343,10 +369,7 @@ export function buildConfirmDelete(): ScreenContent {
   return {
     element: Box(
       { flexDirection: "column", gap: 1 },
-      Text({
-        content: "Are you sure you want to delete this key?",
-        fg: getActiveTheme().error,
-      }),
+      Text({ content: "Are you sure you want to delete this key?", fg: getActiveTheme().error }),
       confirm,
     ),
     helpText: "[Esc] cancel",
@@ -359,11 +382,7 @@ export function buildConfirmDelete(): ScreenContent {
 
 export function buildAddNameInput(): ScreenContent {
   const theme = getActiveTheme();
-  const input = themedInput(
-    "add-name-input",
-    "e.g. work-key, personal, team-alpha",
-    40,
-  );
+  const input = themedInput("add-name-input", "e.g. work-key, personal, team-alpha", 40);
 
   events(input).on("enter", (value: string) => {
     state.pendingKeyName = value.trim();
@@ -372,7 +391,8 @@ export function buildAddNameInput(): ScreenContent {
       callRenderApp();
       return;
     }
-    if (state.store.keys.some((k) => k.name === state.pendingKeyName)) {
+    const provider = state.activeProvider;
+    if (state.store.keys.some((k) => k.name === state.pendingKeyName && k.provider === provider)) {
       setStatus("A key with this name already exists", theme.error);
       callRenderApp();
       return;
@@ -396,7 +416,9 @@ export function buildAddNameInput(): ScreenContent {
 
 export function buildAddKeyInput(): ScreenContent {
   const theme = getActiveTheme();
-  const input = themedInput("add-key-input", "nvapi-...", 55);
+  const provider = state.activeProvider;
+  const placeholder = provider === "nvidia" ? "nvapi-..." : "API key (no prefix required)";
+  const input = themedInput("add-key-input", placeholder, 55);
 
   events(input).on("enter", (value: string) => {
     const key = value.trim();
@@ -405,12 +427,12 @@ export function buildAddKeyInput(): ScreenContent {
       callRenderApp();
       return;
     }
-    if (!key.startsWith("nvapi-")) {
-      setStatus("Key must start with 'nvapi-'", theme.error);
+    if (provider === "nvidia" && !key.startsWith("nvapi-")) {
+      setStatus("NVIDIA key must start with 'nvapi-'", theme.error);
       callRenderApp();
       return;
     }
-    addKey(state.store, state.pendingKeyName, key);
+    addKey(state.store, state.pendingKeyName, key, provider);
     safeSaveStore();
     refreshStore();
     setStatus(`Added key "${state.pendingKeyName}"`, theme.success);
@@ -421,8 +443,9 @@ export function buildAddKeyInput(): ScreenContent {
   return {
     element: Box(
       { flexDirection: "column", gap: 1 },
+      Text({ content: `Provider: ${getProviderDisplayName(provider)}`, fg: theme.textMuted }),
       Text({ content: `Name: ${state.pendingKeyName}`, fg: theme.primary }),
-      Text({ content: "Enter the NVIDIA NIM API key:", fg: theme.text }),
+      Text({ content: "Enter the API key:", fg: theme.text }),
       input,
     ),
     helpText: "[Enter] confirm  [Esc] cancel",
@@ -436,20 +459,12 @@ export function buildAddKeyInput(): ScreenContent {
 export function buildRenameInput(): ScreenContent {
   const theme = getActiveTheme();
   if (!state.renameTargetId) {
-    return {
-      element: Text({ content: "Error: no key selected", fg: theme.error }),
-      helpText: "",
-    };
+    return { element: Text({ content: "Error: no key selected", fg: theme.error }), helpText: "" };
   }
   const entry = state.store.keys.find((k) => k.id === state.renameTargetId);
   const currentName = entry?.name ?? "";
 
-  const input = themedInput(
-    "rename-input",
-    "New friendly name",
-    40,
-    currentName,
-  );
+  const input = themedInput("rename-input", "New friendly name", 40, currentName);
 
   events(input).on("enter", (value: string) => {
     const newName = value.trim();
@@ -458,11 +473,8 @@ export function buildRenameInput(): ScreenContent {
       callRenderApp();
       return;
     }
-    if (
-      state.store.keys.some(
-        (k) => k.name === newName && k.id !== state.renameTargetId,
-      )
-    ) {
+    const provider = state.activeProvider;
+    if (state.store.keys.some((k) => k.name === newName && k.id !== state.renameTargetId && k.provider === provider)) {
       setStatus("A key with this name already exists", theme.error);
       callRenderApp();
       return;
@@ -491,7 +503,9 @@ export function buildRenameInput(): ScreenContent {
 
 export function buildExportPathInput(): ScreenContent {
   const theme = getActiveTheme();
-  const defaultPath = "~/nim-keys-export.json";
+  const provider = state.activeProvider;
+  const providerKeys = state.store.keys.filter((k) => k.provider === provider);
+  const defaultPath = `~/nim-${provider}-keys-export.json`;
   const input = themedInput("export-path-input", defaultPath, 55);
 
   events(input).on("enter", (value: string) => {
@@ -510,10 +524,7 @@ export function buildExportPathInput(): ScreenContent {
   return {
     element: Box(
       { flexDirection: "column", gap: 1 },
-      Text({
-        content: `Export ${state.store.keys.length} key(s) to JSON file:`,
-        fg: theme.text,
-      }),
+      Text({ content: `Export ${providerKeys.length} key(s) to JSON file:`, fg: theme.text }),
       input,
     ),
     helpText: "[Enter] export [Esc] cancel",
@@ -568,10 +579,7 @@ export function buildImportPathInput(): ScreenContent {
   return {
     element: Box(
       { flexDirection: "column", gap: 1 },
-      Text({
-        content: "Import keys from JSON file:",
-        fg: theme.text,
-      }),
+      Text({ content: "Import keys from JSON file:", fg: theme.text }),
       input,
     ),
     helpText: "[Enter] import [Esc] cancel",
@@ -591,38 +599,22 @@ export function buildConfirmImport(): ScreenContent {
   }
 
   const parts: string[] = [];
-  if (result.pendingKeys.length > 0)
-    parts.push(`${result.pendingKeys.length} key(s) will be imported`);
-  if (result.errors.length > 0)
-    parts.push(`${result.errors.length} entry/entries invalid`);
+  if (result.pendingKeys.length > 0) parts.push(`${result.pendingKeys.length} key(s) will be imported`);
+  if (result.errors.length > 0) parts.push(`${result.errors.length} entry/entries invalid`);
 
   const options: SelectOption[] = [
-    {
-      name: "Yes, import",
-      description: parts.join(", "),
-      value: "yes",
-    },
+    { name: "Yes, import", description: parts.join(", "), value: "yes" },
     { name: "No, cancel", description: "Discard the import", value: "no" },
   ];
 
-  const confirm = themedSelect(
-    "confirm-import",
-    50,
-    6,
-    options,
-    0,
-    (_index, option) => {
-      handleImportConfirm(option.value);
-    },
-  );
+  const confirm = themedSelect("confirm-import", 50, 6, options, 0, (_index, option) => {
+    handleImportConfirm(option.value);
+  });
 
   return {
     element: Box(
       { flexDirection: "column", gap: 1 },
-      Text({
-        content: `Confirm import from: ${state.pendingImportPath}`,
-        fg: theme.primary,
-      }),
+      Text({ content: `Confirm import from: ${state.pendingImportPath}`, fg: theme.primary }),
       confirm,
     ),
     helpText: "[Esc] cancel",
@@ -635,7 +627,8 @@ export function buildConfirmImport(): ScreenContent {
 
 export function buildFallbackMenu(): ScreenContent {
   const theme = getActiveTheme();
-  const chain = state.store.fallbackChain;
+  const provider = state.activeProvider;
+  const chain = state.store.fallbackChains[provider];
 
   const opts: (SelectOption | false)[] = [
     {
@@ -651,10 +644,7 @@ export function buildFallbackMenu(): ScreenContent {
   ];
   const options = opts.filter(Boolean) as SelectOption[];
 
-  state.fallbackSettingsIndex = clampIndex(
-    state.fallbackSettingsIndex,
-    options.length,
-  );
+  state.fallbackSettingsIndex = clampIndex(state.fallbackSettingsIndex, options.length);
 
   const menu = themedSelect(
     "fallback-menu",
@@ -680,16 +670,8 @@ export function buildFallbackSettings(): ScreenContent {
   const current = state.store.maxRateLimitFailures;
 
   const options: SelectOption[] = [
-    {
-      name: "+1",
-      description: `Increase threshold to ${current + 1}`,
-      value: "inc",
-    },
-    {
-      name: "-1",
-      description: `Decrease threshold to ${Math.max(1, current - 1)}`,
-      value: "dec",
-    },
+    { name: "+1", description: `Increase threshold to ${current + 1}`, value: "inc" },
+    { name: "-1", description: `Decrease threshold to ${Math.max(1, current - 1)}`, value: "dec" },
     { name: "Back", description: "Return to fallback menu", value: "back" },
   ];
 
@@ -727,14 +709,8 @@ export function buildFallbackSettings(): ScreenContent {
       { flexDirection: "column", gap: 1 },
       Box(
         { flexDirection: "column" },
-        Text({
-          content: " Fallback Settings:",
-          fg: theme.primary,
-        }),
-        Text({
-          content: ` Fallback after ${current} consecutive rate limit${current === 1 ? "" : "s"}`,
-          fg: theme.textMuted,
-        }),
+        Text({ content: " Fallback Settings:", fg: theme.primary }),
+        Text({ content: ` Fallback after ${current} consecutive rate limit${current === 1 ? "" : "s"}`, fg: theme.textMuted }),
       ),
       selector,
     ),
@@ -747,16 +723,9 @@ export function buildFallbackSettings(): ScreenContent {
 // ---------------------------------------------------------------------------
 
 const BRAILLE_SPINNER_FRAMES = [
-  "\u280B", // ⠋
-  "\u2819", // ⠙
-  "\u2839", // ⠹
-  "\u2838", // ⠸
-  "\u283C", // ⠼
-  "\u2834", // ⠴
-  "\u2826", // ⠦
-  "\u2827", // ⠧
-  "\u2807", // ⠇
-  "\u280F", // ⠏
+  "\u280B", "\u2819", "\u2839", "\u2838",
+  "\u283C", "\u2834", "\u2826", "\u2827",
+  "\u2807", "\u280F",
 ];
 
 function getBrailleSpinner(): string {
@@ -766,35 +735,34 @@ function getBrailleSpinner(): string {
 
 export function buildFallbackChain(): ScreenContent {
   const theme = getActiveTheme();
-  const chain = state.store.fallbackChain;
-  const totalItems = chain.length + 1; // +1 for "Add model"
+  const provider = state.activeProvider;
+  const chain = state.store.fallbackChains[provider];
+  const totalItems = chain.length + 1;
 
-  state.fallbackChainIndex = clampIndex(state.fallbackChainIndex, totalItems);
+  const currentIndex = state.fallbackChainIndex[provider];
+  state.fallbackChainIndex[provider] = clampIndex(currentIndex, totalItems);
 
   const viewportHeight = 12;
   const listWidth = 56;
 
-  // Adjust scroll offset so the selected item is visible
-  if (state.fallbackChainIndex < state.fallbackChainScrollOffset) {
-    state.fallbackChainScrollOffset = state.fallbackChainIndex;
+  if (state.fallbackChainIndex[provider] < state.fallbackChainScrollOffset[provider]) {
+    state.fallbackChainScrollOffset[provider] = state.fallbackChainIndex[provider];
   } else if (
-    state.fallbackChainIndex >=
-    state.fallbackChainScrollOffset + viewportHeight
+    state.fallbackChainIndex[provider] >=
+    state.fallbackChainScrollOffset[provider] + viewportHeight
   ) {
-    state.fallbackChainScrollOffset =
-      state.fallbackChainIndex - viewportHeight + 1;
+    state.fallbackChainScrollOffset[provider] =
+      state.fallbackChainIndex[provider] - viewportHeight + 1;
   }
 
   const items: any[] = [];
-  const startIdx = state.fallbackChainScrollOffset;
+  const startIdx = state.fallbackChainScrollOffset[provider];
   const endIdx = Math.min(startIdx + viewportHeight, chain.length);
 
   for (let i = startIdx; i < endIdx; i++) {
     const model = chain[i];
-    const isSelected = i === state.fallbackChainIndex;
-    const isActivelyBenchmarking =
-      model.benchmarkStatus === "running" &&
-      state.benchmarkRunners.has(model.id);
+    const isSelected = i === state.fallbackChainIndex[provider];
+    const isActivelyBenchmarking = model.benchmarkStatus === "running" && state.benchmarkRunners.has(model.id);
 
     let statusText: string;
     let statusIsError = false;
@@ -815,16 +783,12 @@ export function buildFallbackChain(): ScreenContent {
     } else if (model.benchmarkStatus === "running") {
       statusText = `${getBrailleSpinner()} benchmarking...`;
     } else if (model.benchmarkStatus === "done") {
-      const ttfbStr =
-        model.benchmarkTtfb != null && Number.isFinite(model.benchmarkTtfb)
-          ? `${model.benchmarkTtfb.toFixed(0)}ms`
-          : "?ms";
-      const tpsStr =
-        model.benchmarkTps != null &&
-        Number.isFinite(model.benchmarkTps) &&
-        model.benchmarkTps > 0
-          ? `${model.benchmarkTps.toFixed(1)}`
-          : "?";
+      const ttfbStr = model.benchmarkTtfb != null && Number.isFinite(model.benchmarkTtfb)
+        ? `${model.benchmarkTtfb.toFixed(0)}ms`
+        : "?ms";
+      const tpsStr = model.benchmarkTps != null && Number.isFinite(model.benchmarkTps) && model.benchmarkTps > 0
+        ? `${model.benchmarkTps.toFixed(1)}`
+        : "?";
       statusText = `\u2713 ${ttfbStr} TTFB, ${tpsStr} TPS`;
     } else if (model.benchmarkStatus === "error") {
       statusText = `\u2717 ${model.benchmarkError}`;
@@ -835,19 +799,16 @@ export function buildFallbackChain(): ScreenContent {
 
     const prefix = isSelected ? "\u25b6 " : "  ";
     const nameWidth = listWidth - 4;
-    const displayName =
-      model.name.length > nameWidth
-        ? model.name.slice(0, nameWidth - 3) + "..."
-        : model.name;
+    const displayName = model.name.length > nameWidth
+      ? model.name.slice(0, nameWidth - 3) + "..."
+      : model.name;
 
     items.push(
       Box(
         {
           flexDirection: "row",
           paddingX: 1,
-          backgroundColor: isSelected
-            ? theme.selectedBg
-            : theme.backgroundPanel,
+          backgroundColor: isSelected ? theme.selectedBg : theme.backgroundPanel,
           width: listWidth,
         },
         Text({
@@ -856,29 +817,22 @@ export function buildFallbackChain(): ScreenContent {
           width: statusText ? nameWidth - statusText.length : nameWidth,
         }),
         statusText
-          ? Text({
-              content: statusText,
-              fg: statusIsError ? theme.error : theme.textMuted,
-            })
+          ? Text({ content: statusText, fg: statusIsError ? theme.error : theme.textMuted })
           : Text({ content: "", fg: theme.backgroundPanel }),
       ),
     );
   }
 
-  // "Add model" item at the end (only if visible in viewport)
   const addModelIndex = chain.length;
-  const isAddVisible =
-    addModelIndex >= startIdx && addModelIndex < startIdx + viewportHeight;
+  const isAddVisible = addModelIndex >= startIdx && addModelIndex < startIdx + viewportHeight;
   if (isAddVisible) {
-    const isAddSelected = state.fallbackChainIndex === addModelIndex;
+    const isAddSelected = state.fallbackChainIndex[provider] === addModelIndex;
     items.push(
       Box(
         {
           flexDirection: "row",
           paddingX: 1,
-          backgroundColor: isAddSelected
-            ? theme.selectedBg
-            : theme.backgroundPanel,
+          backgroundColor: isAddSelected ? theme.selectedBg : theme.backgroundPanel,
           width: listWidth,
         },
         Text({
@@ -889,17 +843,14 @@ export function buildFallbackChain(): ScreenContent {
     );
   }
 
+  const providerName = getProviderDisplayName(provider);
   return {
     element: Box(
       { flexDirection: "column", gap: 0, width: listWidth },
-      Text({
-        content: " Fallback Chain (ordered):",
-        fg: theme.primary,
-      }),
+      Text({ content: ` ${providerName} Fallback Chain (ordered):`, fg: theme.primary }),
       ...items,
     ),
-    helpText:
-      "[\u2191\u2193] move  [x] remove  [j/k] reorder\n\n[a] add  [b] benchmark  [c] cancel",
+    helpText: "[Up/Down] move  [x] remove  [j/k] reorder\n[a] add  [b] benchmark  [c] cancel",
   };
 }
 
@@ -907,14 +858,10 @@ export function buildFallbackChain(): ScreenContent {
 // Model Selector
 // ---------------------------------------------------------------------------
 
-export function getFilteredModelsForSelector(): Array<{
-  id: string;
-  name: string;
-}> {
-  const addedIds = new Set(state.store.fallbackChain.map((m) => m.id));
-  const filteredModels = state.availableModels.filter(
-    (model) => !addedIds.has(model.id),
-  );
+export function getFilteredModelsForSelector(): Array<{ id: string; name: string }> {
+  const provider = state.activeProvider;
+  const addedIds = new Set(state.store.fallbackChains[provider].map((m) => m.id));
+  const filteredModels = state.availableModels[provider].filter((model) => !addedIds.has(model.id));
   const searchQuery = state.modelSearchQuery.toLowerCase();
   return searchQuery.length > 0
     ? filteredModels.filter(
@@ -927,11 +874,12 @@ export function getFilteredModelsForSelector(): Array<{
 
 export function buildModelSelector(): ScreenContent {
   const theme = getActiveTheme();
+  const provider = state.activeProvider;
 
-  if (state.availableModels.length === 0 && !state.modelsLoaded) {
-    state.modelsLoaded = true;
-    fetchNimModels().then(() => {
-      if (state.availableModels.length === 0) {
+  if (state.availableModels[provider].length === 0 && !state.modelsLoaded[provider]) {
+    state.modelsLoaded[provider] = true;
+    fetchModels(provider).then(() => {
+      if (state.availableModels[provider].length === 0) {
         setStatus("No models available", getActiveTheme().warning);
       }
       callRenderApp();
@@ -940,10 +888,7 @@ export function buildModelSelector(): ScreenContent {
     return {
       element: Box(
         { flexDirection: "column", gap: 1 },
-        Text({
-          content: "Loading models from NVIDIA NIM...",
-          fg: theme.textMuted,
-        }),
+        Text({ content: `Loading models from ${getProviderDisplayName(provider)}...`, fg: theme.textMuted }),
       ),
       helpText: "[Esc] cancel",
     };
@@ -951,49 +896,37 @@ export function buildModelSelector(): ScreenContent {
 
   const searchFilteredModels = getFilteredModelsForSelector();
 
-  // Reset scroll when entering model selector or when search changes
-  if (state.modelSelectorScrollOffset < 0) {
-    state.modelSelectorScrollOffset = 0;
+  if (state.modelSelectorScrollOffset[provider] < 0) {
+    state.modelSelectorScrollOffset[provider] = 0;
   }
 
-  state.modelSelectorIndex = clampIndex(
-    state.modelSelectorIndex,
-    searchFilteredModels.length,
-  );
+  state.modelSelectorIndex[provider] = clampIndex(state.modelSelectorIndex[provider], searchFilteredModels.length);
 
-  const searchDisplay =
-    state.modelSearchQuery.length > 0
-      ? Text({
-          content: `Search: ${state.modelSearchQuery}_`,
-          fg: theme.primary,
-        })
-      : Text({
-          content: "Type to search...",
-          fg: theme.textMuted,
-        });
+  const searchDisplay = state.modelSearchQuery.length > 0
+    ? Text({ content: `Search: ${state.modelSearchQuery}_`, fg: theme.primary })
+    : Text({ content: "Type to search...", fg: theme.textMuted });
 
   const listWidth = 56;
   const viewportHeight = 12;
   const totalItems = searchFilteredModels.length;
 
-  // Adjust scroll offset so the selected item is visible
-  if (state.modelSelectorIndex < state.modelSelectorScrollOffset) {
-    state.modelSelectorScrollOffset = state.modelSelectorIndex;
+  if (state.modelSelectorIndex[provider] < state.modelSelectorScrollOffset[provider]) {
+    state.modelSelectorScrollOffset[provider] = state.modelSelectorIndex[provider];
   } else if (
-    state.modelSelectorIndex >=
-    state.modelSelectorScrollOffset + viewportHeight
+    state.modelSelectorIndex[provider] >=
+    state.modelSelectorScrollOffset[provider] + viewportHeight
   ) {
-    state.modelSelectorScrollOffset =
-      state.modelSelectorIndex - viewportHeight + 1;
+    state.modelSelectorScrollOffset[provider] =
+      state.modelSelectorIndex[provider] - viewportHeight + 1;
   }
 
   const items: any[] = [];
-  const startIdx = state.modelSelectorScrollOffset;
+  const startIdx = state.modelSelectorScrollOffset[provider];
   const endIdx = Math.min(startIdx + viewportHeight, totalItems);
 
   for (let i = startIdx; i < endIdx; i++) {
     const model = searchFilteredModels[i];
-    const isSelected = i === state.modelSelectorIndex;
+    const isSelected = i === state.modelSelectorIndex[provider];
     const prefix = isSelected ? "\u25b6 " : "  ";
 
     items.push(
@@ -1001,15 +934,10 @@ export function buildModelSelector(): ScreenContent {
         {
           flexDirection: "row",
           paddingX: 1,
-          backgroundColor: isSelected
-            ? theme.selectedBg
-            : theme.backgroundPanel,
+          backgroundColor: isSelected ? theme.selectedBg : theme.backgroundPanel,
           width: listWidth,
         },
-        Text({
-          content: `${prefix}${model.name}`,
-          fg: isSelected ? theme.selectedText : theme.text,
-        }),
+        Text({ content: `${prefix}${model.name}`, fg: isSelected ? theme.selectedText : theme.text }),
       ),
     );
   }
@@ -1023,10 +951,7 @@ export function buildModelSelector(): ScreenContent {
           backgroundColor: theme.backgroundPanel,
           width: listWidth,
         },
-        Text({
-          content: "  No matching models",
-          fg: theme.textMuted,
-        }),
+        Text({ content: "  No matching models", fg: theme.textMuted }),
       ),
     );
   }
@@ -1034,13 +959,10 @@ export function buildModelSelector(): ScreenContent {
   return {
     element: Box(
       { flexDirection: "column", gap: 0, width: listWidth },
-      Text({
-        content: " Select a model to add:",
-        fg: theme.primary,
-      }),
+      Text({ content: " Select a model to add:", fg: theme.primary }),
       searchDisplay,
       ...items,
     ),
-    helpText: "[Esc] cancel  [Enter] select  [Type] search  [Backspace] clear",
+    helpText: "[Esc] cancel  [Enter] select  [Type] search  [Backspace] clear  [r] refresh",
   };
 }

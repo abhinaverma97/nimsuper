@@ -1,3 +1,5 @@
+export type ProviderId = "nvidia" | "google";
+
 export interface ModelBlacklistEntry {
   readonly blacklistedUntil: number;
   readonly nextDurationMs: number;
@@ -11,6 +13,7 @@ export interface ApiKeyEntry {
   lastUsedAt?: number;
   rateLimitCount: number;
   enabled: boolean;
+  provider: ProviderId;
   modelBlacklist?: { [modelId: string]: ModelBlacklistEntry };
 }
 
@@ -29,13 +32,14 @@ export interface KeyStore {
   rotationStrategy: "round-robin" | "least-failures";
   updatedAt: number;
   lastUsedKeyId?: string;
-  fallbackChain: FallbackModel[];
+  fallbackChains: { [P in ProviderId]: FallbackModel[] };
   maxRateLimitFailures: number;
 }
 
 export interface ExportedKey {
   name: string;
   key: string;
+  provider: ProviderId;
 }
 
 export interface ExportPayload {

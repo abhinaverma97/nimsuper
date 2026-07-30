@@ -1,6 +1,8 @@
 import type { VNode } from "@opentui/core";
+import type { ProviderId } from "../types.js";
 
 export type Screen =
+  | "provider-tabs"
   | "list"
   | "key-selector"
   | "key-actions"
@@ -27,3 +29,9 @@ export interface ScreenContent {
   element: VNode;
   helpText: string;
 }
+
+export type ActiveTab = "keys" | "fallback";
+
+export type ProviderTab = ProviderId;
+
+export { ProviderId };

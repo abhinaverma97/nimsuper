@@ -10,7 +10,7 @@ import {
   resetRateLimit,
   recordModelRateLimit,
 } from "./storage.js";
-import type { KeyStore, KeyStoreConfig, FallbackModel } from "./types.js";
+import type { KeyStore, KeyStoreConfig, FallbackModel, ProviderId } from "./types.js";
 import {
   extractStatus,
   describeError,
@@ -20,13 +20,12 @@ import {
   type SessionState,
 } from "./errors.js";
 
-const PROVIDER_ID = "nvidia";
+const PROVIDERS: ProviderId[] = ["nvidia", "google"];
 const NIM_BASE_URL = "https://integrate.api.nvidia.com";
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 const VALID_STRATEGIES = ["round-robin", "least-failures"] as const;
 
-function isValidStrategy(
-  val: unknown,
-): val is KeyStoreConfig["rotationStrategy"] {
+function isValidStrategy(val: unknown): val is KeyStoreConfig["rotationStrategy"] {
   return val === "round-robin" || val === "least-failures";
 }
 
@@ -34,27 +33,42 @@ function modelKey(model: { providerID: string; modelID: string }): string {
   return `${model.providerID}/${model.modelID}`;
 }
 
-async function isSubagentSession(
-  client: PluginInput["client"],
-  sessionID: string,
-): Promise<boolean> {
+function getEnvKeyName(provider: ProviderId): string {
+  return provider === "nvidia" ? "NVIDIA_API_KEY" : "GOOGLE_API_KEY";
+}
+
+function isProviderRequest(provider: ProviderId, modelApiStr: string, providerId: string | undefined, modelProviderId: string | undefined): boolean {
+  if (provider === "nvidia") {
+    return (
+      modelApiStr.includes("nvidia.com") ||
+      !!(providerId && providerId.toLowerCase().includes("nvidia")) ||
+      !!(modelProviderId && modelProviderId.toLowerCase().includes("nvidia"))
+    );
+  }
+  if (provider === "google") {
+    return (
+      modelApiStr.includes("googleapis.com") ||
+      modelApiStr.includes("generativelanguage") ||
+      !!(providerId && providerId.toLowerCase().includes("google")) ||
+      !!(modelProviderId && modelProviderId.toLowerCase().includes("google")) ||
+      !!(modelProviderId && modelProviderId.toLowerCase().includes("gemini"))
+    );
+  }
+  return false;
+}
+
+async function isSubagentSession(client: PluginInput["client"], sessionID: string): Promise<boolean> {
   try {
-    const res = await (
-      client.session as unknown as {
-        get: (p: { path: { id: string } }) => Promise<unknown>;
-      }
-    ).get({ path: { id: sessionID } });
-    const data =
-      res && typeof res === "object" && "data" in res
-        ? (res as { data: unknown }).data
-        : res;
+    const res = await (client.session as unknown as {
+      get: (p: { path: { id: string } }) => Promise<unknown>;
+    }).get({ path: { id: sessionID } });
+    const data = res && typeof res === "object" && "data" in res
+      ? (res as { data: unknown }).data
+      : res;
     if (!data || typeof data !== "object") return false;
     return (data as Record<string, unknown>)?.parentID !== undefined;
   } catch (err) {
-    console.debug(
-      `[nimsuper] isSubagentSession failed for ${sessionID}:`,
-      err,
-    );
+    console.debug(`[nimsuper] isSubagentSession failed for ${sessionID}:`, err);
     return false;
   }
 }
@@ -67,42 +81,29 @@ const SESSIONS_MAX_AGE_MS = 10 * 60 * 1000;
 
 const subAgentCache = new Map<string, number>();
 
-async function isSubagentSessionCached(
-  client: PluginInput["client"],
-  sessionID: string,
-): Promise<boolean> {
+async function isSubagentSessionCached(client: PluginInput["client"], sessionID: string): Promise<boolean> {
   const cached = subAgentCache.get(sessionID);
   if (cached !== undefined) {
-    if (cached > Date.now()) {
-      return true;
-    }
+    if (cached > Date.now()) return true;
     subAgentCache.delete(sessionID);
   }
   const result = await isSubagentSession(client, sessionID);
   if (result) {
     if (subAgentCache.size >= SUBAGENT_CACHE_MAX_SIZE) {
       const firstKey = subAgentCache.keys().next().value;
-      if (firstKey !== undefined) {
-        subAgentCache.delete(firstKey);
-      }
+      if (firstKey !== undefined) subAgentCache.delete(firstKey);
     }
     subAgentCache.set(sessionID, Date.now() + SUBAGENT_CACHE_TTL_MS);
   }
   return result;
 }
 
-function findChainIndex(
-  chain: FallbackModel[],
-  model: { providerID: string; modelID: string } | undefined,
-): number {
+function findChainIndex(chain: FallbackModel[], model: { providerID: string; modelID: string } | undefined): number {
   if (!model) return -1;
   return chain.findIndex((entry) => entry.id === model.modelID);
 }
 
-export const NvidiaNimKeyRotator: Plugin = async (
-  input: PluginInput,
-  options?: Record<string, unknown>,
-) => {
+export const NimSuperPlugin: Plugin = async (input: PluginInput, options?: Record<string, unknown>) => {
   const client = input.client;
   const config: KeyStoreConfig = {
     storePath: options?.storePath as string | undefined,
@@ -112,7 +113,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
   };
 
   const store = loadStore(config) ?? getDefaultStore();
-  if (!Array.isArray(store.fallbackChain)) store.fallbackChain = [];
+  if (!store.fallbackChains) store.fallbackChains = { nvidia: [], google: [] };
 
   const sessions = new Map<string, SessionState>();
 
@@ -131,9 +132,10 @@ export const NvidiaNimKeyRotator: Plugin = async (
       store.rotationStrategy = fresh.rotationStrategy;
       store.updatedAt = fresh.updatedAt;
       store.lastUsedKeyId = fresh.lastUsedKeyId;
-      store.fallbackChain = Array.isArray(fresh.fallbackChain)
-        ? fresh.fallbackChain
-        : [];
+      store.fallbackChains = {
+        nvidia: Array.isArray(fresh.fallbackChains?.nvidia) ? fresh.fallbackChains.nvidia : [],
+        google: Array.isArray(fresh.fallbackChains?.google) ? fresh.fallbackChains.google : [],
+      };
       store.maxRateLimitFailures =
         typeof fresh.maxRateLimitFailures === "number" &&
         Number.isFinite(fresh.maxRateLimitFailures) &&
@@ -153,27 +155,23 @@ export const NvidiaNimKeyRotator: Plugin = async (
     }
   };
 
-  const activeKeys = getActiveKeys(store);
-
-  if (activeKeys.length === 0) {
-    const envKey = process.env.NVIDIA_API_KEY;
-    if (envKey) {
-      const existing = store.keys.find((k) => k.name === "env-default");
-      if (!existing) {
-        addKey(store, "env-default", envKey);
-        safeSaveStore();
+  for (const provider of PROVIDERS) {
+    const activeKeys = getActiveKeys(store, provider);
+    if (activeKeys.length === 0) {
+      const envKey = process.env[getEnvKeyName(provider)];
+      if (envKey) {
+        const existing = store.keys.find((k) => k.name === "env-default" && k.provider === provider);
+        if (!existing) {
+          addKey(store, "env-default", envKey, provider);
+          safeSaveStore();
+        }
       }
     }
   }
 
-  const showToast = async (
-    variant: "success" | "info" | "warning" | "error",
-    message: string,
-  ) => {
+  const showToast = async (variant: "success" | "info" | "warning" | "error", message: string) => {
     try {
-      await client.tui?.showToast?.({
-        body: { title: "Model Fallback", message, variant },
-      });
+      await client.tui?.showToast?.({ body: { title: "Model Fallback", message, variant } });
     } catch (err) {
       console.debug("[nimsuper] showToast failed:", err);
     }
@@ -222,47 +220,34 @@ export const NvidiaNimKeyRotator: Plugin = async (
     sessions.delete(sessionID);
   };
 
-  const waitForSessionIdle = async (
-    sessionID: string,
-    timeoutMs: number = 2000,
-  ): Promise<boolean> => {
+  const waitForSessionIdle = async (sessionID: string, timeoutMs: number = 2000): Promise<boolean> => {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       try {
         const res = await client.session.status({});
-        const data =
-          res && typeof res === "object" && "data" in res
-            ? (res as { data: unknown }).data
-            : res;
+        const data = res && typeof res === "object" && "data" in res
+          ? (res as { data: unknown }).data
+          : res;
         if (data && typeof data === "object") {
           const statusMap = data as Record<string, unknown>;
-          const status = statusMap[sessionID] as
-            | Record<string, unknown>
-            | undefined;
-          if (status?.type === "idle") {
-            return true;
-          }
-          if (!status) {
-            return true;
-          }
+          const status = statusMap[sessionID] as Record<string, unknown> | undefined;
+          if (status?.type === "idle") return true;
+          if (!status) return true;
         }
       } catch {
         // status endpoint might not be available, keep polling
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
-    console.debug(
-      `[nimsuper] waitForSessionIdle timed out for ${sessionID}`,
-    );
+    console.debug(`[nimsuper] waitForSessionIdle timed out for ${sessionID}`);
     return false;
   };
 
-  const triggerRetry = async (
-    sessionID: string,
-    state: SessionState,
-    reason?: string,
-  ): Promise<boolean> => {
-    const chain = store.fallbackChain;
+  const getChainForProvider = (provider: ProviderId): FallbackModel[] => store.fallbackChains[provider];
+
+  const triggerRetry = async (sessionID: string, state: SessionState, reason?: string): Promise<boolean> => {
+    const provider = state.sessionProviderId as ProviderId | undefined ?? "nvidia";
+    const chain = getChainForProvider(provider);
     if (chain.length < 2) return false;
 
     let nextIndex = (state.attemptIndex + 1) % chain.length;
@@ -281,18 +266,10 @@ export const NvidiaNimKeyRotator: Plugin = async (
       const target = chain[nextIndex];
       if (!source || !target) return false;
 
-      await showToast(
-        "warning",
-        `${source.name} → ${target.name}${reason ? `: ${reason}` : ""}`,
-      );
+      await showToast("warning", `${source.name} → ${target.name}${reason ? `: ${reason}` : ""}`);
 
-      const messagesResult = await client.session.messages({
-        path: { id: sessionID },
-      });
-      const entries =
-        messagesResult && "data" in messagesResult
-          ? messagesResult.data
-          : messagesResult;
+      const messagesResult = await client.session.messages({ path: { id: sessionID } });
+      const entries = messagesResult && "data" in messagesResult ? messagesResult.data : messagesResult;
       if (!Array.isArray(entries)) return false;
 
       const userMessages = (entries as Array<Record<string, unknown>>).filter(
@@ -300,10 +277,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
       );
       if (userMessages.length === 0) return false;
 
-      const lastUser = userMessages[userMessages.length - 1] as Record<
-        string,
-        unknown
-      >;
+      const lastUser = userMessages[userMessages.length - 1] as Record<string, unknown>;
       const lastUserInfo = lastUser.info as Record<string, unknown>;
       const lastUserParts = lastUser.parts as Array<Record<string, unknown>>;
 
@@ -344,9 +318,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
 
       const idle = await waitForSessionIdle(sessionID);
       if (!idle) {
-        console.debug(
-          `[nimsuper] session ${sessionID} did not go idle after abort`,
-        );
+        console.debug(`[nimsuper] session ${sessionID} did not go idle after abort`);
         state.pendingRetryIndex = undefined;
         return false;
       }
@@ -357,7 +329,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
           messageID: lastUserInfo?.id as string,
           agent: lastUserInfo?.agent as string,
           model: {
-            providerID: state.sessionProviderId ?? PROVIDER_ID,
+            providerID: state.sessionProviderId ?? provider,
             modelID: target.id,
           },
           parts: promptParts,
@@ -384,12 +356,8 @@ export const NvidiaNimKeyRotator: Plugin = async (
       reloadFromDisk();
       if (errorKeyId) {
         recordRateLimit(store, errorKeyId);
-        const stateForBlacklist = sessionID
-          ? sessions.get(sessionID)
-          : undefined;
-        const modelForBlacklist =
-          stateForBlacklist?.currentModelId ??
-          stateForBlacklist?.activeChainModelId;
+        const stateForBlacklist = sessionID ? sessions.get(sessionID) : undefined;
+        const modelForBlacklist = stateForBlacklist?.currentModelId ?? stateForBlacklist?.activeChainModelId;
         if (modelForBlacklist) {
           recordModelRateLimit(store, errorKeyId, modelForBlacklist);
         }
@@ -415,18 +383,13 @@ export const NvidiaNimKeyRotator: Plugin = async (
     state.lastErrorHandledAt = now;
 
     if (!shouldRetryForError(error, state)) {
-      if (!is429Error(error)) {
-        state.rateLimitCount = 0;
-      }
+      if (!is429Error(error)) state.rateLimitCount = 0;
       return;
     }
 
     if (await isSubagentSessionCached(client, sessionID)) {
       if (is429Error(error)) {
-        await showToast(
-          "warning",
-          `Subagent rate limited — model switch skipped to preserve parent task`,
-        );
+        await showToast("warning", "Subagent rate limited — model switch skipped to preserve parent task");
       }
       return;
     }
@@ -443,10 +406,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
     await triggerRetry(sessionID, state, reason);
   };
 
-  const handleSessionStatusRetry = async (
-    sessionID: string,
-    status: Record<string, unknown>,
-  ) => {
+  const handleSessionStatusRetry = async (sessionID: string, status: Record<string, unknown>) => {
     const message = status.message as string | undefined;
     const is429 = isStatusMessageRateLimited(message);
     if (!is429) return;
@@ -455,15 +415,12 @@ export const NvidiaNimKeyRotator: Plugin = async (
     if (!state) return;
     if (state.inRetry) return;
 
-    if (await isSubagentSessionCached(client, sessionID)) {
-      return;
-    }
+    if (await isSubagentSessionCached(client, sessionID)) return;
 
     reloadFromDisk();
     if (store.lastUsedKeyId) {
       recordRateLimit(store, store.lastUsedKeyId);
-      const modelForBlacklist =
-        state.currentModelId ?? state.activeChainModelId;
+      const modelForBlacklist = state.currentModelId ?? state.activeChainModelId;
       if (modelForBlacklist) {
         recordModelRateLimit(store, store.lastUsedKeyId, modelForBlacklist);
       }
@@ -484,12 +441,9 @@ export const NvidiaNimKeyRotator: Plugin = async (
     if (!sessionID) return;
 
     const error = props?.error as Record<string, unknown> | undefined;
-    const errorMessage =
-      typeof error?.message === "string" ? error.message : undefined;
+    const errorMessage = typeof error?.message === "string" ? error.message : undefined;
 
-    if (!isStatusMessageRateLimited(errorMessage) && !is429Error(error)) {
-      return;
-    }
+    if (!isStatusMessageRateLimited(errorMessage) && !is429Error(error)) return;
 
     const state = sessions.get(sessionID);
     if (!state) return;
@@ -503,8 +457,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
     reloadFromDisk();
     if (errorKeyId) {
       recordRateLimit(store, errorKeyId);
-      const modelForBlacklist =
-        state.currentModelId ?? state.activeChainModelId;
+      const modelForBlacklist = state.currentModelId ?? state.activeChainModelId;
       if (modelForBlacklist) {
         recordModelRateLimit(store, errorKeyId, modelForBlacklist);
       }
@@ -513,10 +466,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
     safeSaveStore();
 
     if (await isSubagentSessionCached(client, sessionID)) {
-      await showToast(
-        "warning",
-        `Subagent rate limited — model switch skipped to preserve parent task`,
-      );
+      await showToast("warning", "Subagent rate limited — model switch skipped to preserve parent task");
       return;
     }
 
@@ -529,30 +479,22 @@ export const NvidiaNimKeyRotator: Plugin = async (
 
   const hooks: Hooks = {
     auth: {
-      provider: PROVIDER_ID,
+      provider: "nvidia",
       methods: [
         {
           type: "api",
           label: "Enter NVIDIA NIM API Key",
-          async authorize(inputs) {
+          async authorize(inputs: Record<string, string>) {
             const key = inputs?.["apiKey"];
             if (!key) return { type: "failed" };
-
             try {
-              const res = await fetch(`${NIM_BASE_URL}/v1/models`, {
-                headers: { Authorization: `Bearer ${key}` },
-              });
+              const res = await fetch(`${NIM_BASE_URL}/v1/models`, { headers: { Authorization: `Bearer ${key}` } });
               if (!res.ok) return { type: "failed" };
             } catch (err) {
               console.debug("[nimsuper] authorize fetch failed:", err);
               return { type: "failed" };
             }
-
-            return {
-              type: "success",
-              key,
-              provider: PROVIDER_ID,
-            };
+            return { type: "success", key, provider: "nvidia" };
           },
         },
       ],
@@ -561,21 +503,21 @@ export const NvidiaNimKeyRotator: Plugin = async (
       const providerId = _input?.provider?.info?.id;
       const modelApi = (_input.model as Record<string, unknown>)?.api;
       const modelProviderId = _input.model?.providerID;
-      const modelApiStr =
-        typeof modelApi === "string"
-          ? modelApi
-          : modelApi && typeof modelApi === "object"
-            ? ((modelApi as Record<string, unknown>)?.url as string) ?? ""
-            : "";
-      const isNvidia =
-        modelApiStr.includes("nvidia.com") ||
-        !!(providerId && providerId.toLowerCase().includes("nvidia")) ||
-        !!(modelProviderId && modelProviderId.toLowerCase().includes("nvidia"));
-      if (!isNvidia) return;
+      const modelApiStr = typeof modelApi === "string"
+        ? modelApi
+        : modelApi && typeof modelApi === "object"
+          ? ((modelApi as Record<string, unknown>)?.url as string) ?? ""
+          : "";
+
+      const isNvidia = isProviderRequest("nvidia", modelApiStr, providerId, modelProviderId);
+      const isGoogle = isProviderRequest("google", modelApiStr, providerId, modelProviderId);
+      const provider = isNvidia ? "nvidia" : isGoogle ? "google" : null;
+      if (!provider) return;
+
       reloadFromDisk();
       const prevKeyId = store.lastUsedKeyId;
       const modelIdForRotation = _input.model?.id;
-      const next = getNextKey(store, config, modelIdForRotation);
+      const next = getNextKey(store, config, modelIdForRotation, provider);
       if (next) {
         _output.headers["Authorization"] = `Bearer ${next.key.key}`;
         if (prevKeyId && prevKeyId !== next.key.id) {
@@ -591,13 +533,22 @@ export const NvidiaNimKeyRotator: Plugin = async (
     "chat.message": async (input, output) => {
       const reqModel = output.message.model ?? input.model;
       const reqProviderId = reqModel?.providerID;
-      const inChain =
-        reqModel &&
-        findChainIndex(store.fallbackChain, reqModel) >= 0;
-      const isNvidia =
-        typeof reqProviderId === "string" && reqProviderId.toLowerCase().includes("nvidia");
-      if (!inChain && !isNvidia) return;
-      const chain = store.fallbackChain;
+
+      let matchedProvider: ProviderId | null = null;
+      for (const provider of PROVIDERS) {
+        const chain = getChainForProvider(provider);
+        if (reqModel && findChainIndex(chain, reqModel) >= 0) {
+          matchedProvider = provider;
+          break;
+        }
+        const isProvider = typeof reqProviderId === "string" && reqProviderId.toLowerCase().includes(provider);
+        if (isProvider) {
+          matchedProvider = provider;
+        }
+      }
+      if (!matchedProvider) return;
+
+      const chain = getChainForProvider(matchedProvider);
       if (chain.length === 0) return;
 
       const sessionID = input.sessionID;
@@ -634,26 +585,26 @@ export const NvidiaNimKeyRotator: Plugin = async (
       }
 
       output.message.model = {
-        providerID: requestedModel?.providerID ?? PROVIDER_ID,
+        providerID: requestedModel?.providerID ?? matchedProvider,
         modelID: target.id,
       };
 
       state.activeChainKey = activeChainKeyStr;
       state.activeChainModelId = target.id;
-      state.sessionProviderId = requestedModel?.providerID;
+      state.sessionProviderId = matchedProvider;
       state.attemptIndex = desiredIndex;
       state.lastUserMessageID = output.message.id;
     },
     "shell.env": async (_input, output) => {
       reloadFromDisk();
-      if (
-        output.env.NVIDIA_API_KEY !== undefined ||
-        getActiveKeys(store).length > 0
-      ) {
-        const next = getNextKey(store, config);
-        if (next) {
-          output.env.NVIDIA_API_KEY = next.key.key;
-          safeSaveStore();
+      for (const provider of PROVIDERS) {
+        const envKeyName = getEnvKeyName(provider);
+        if (output.env[envKeyName] !== undefined || getActiveKeys(store, provider).length > 0) {
+          const next = getNextKey(store, config, undefined, provider);
+          if (next) {
+            output.env[envKeyName] = next.key.key;
+            safeSaveStore();
+          }
         }
       }
     },
@@ -669,9 +620,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
       }
 
       if (event.type === "session.status") {
-        const props = (event as Record<string, unknown>).properties as
-          | Record<string, unknown>
-          | undefined;
+        const props = (event as Record<string, unknown>).properties as Record<string, unknown> | undefined;
         const sessionID = props?.sessionID as string | undefined;
         const status = props?.status as Record<string, unknown> | undefined;
         const statusType = status?.type;
@@ -694,8 +643,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
       }
 
       if (event.type === "session.idle") {
-        const sessionID = (event.properties as Record<string, unknown>)
-          ?.sessionID as string;
+        const sessionID = (event.properties as Record<string, unknown>)?.sessionID as string;
         if (!sessionID) return;
         const state = sessions.get(sessionID);
         if (!state) return;
@@ -706,12 +654,7 @@ export const NvidiaNimKeyRotator: Plugin = async (
       }
 
       if (event.type === "session.deleted") {
-        const sessionID = (
-          (event.properties as Record<string, unknown>)?.info as Record<
-            string,
-            unknown
-          >
-        )?.id as string;
+        const sessionID = ((event.properties as Record<string, unknown>)?.info as Record<string, unknown>)?.id as string;
         if (sessionID) cleanupSession(sessionID);
       }
     },
@@ -720,4 +663,4 @@ export const NvidiaNimKeyRotator: Plugin = async (
   return hooks;
 };
 
-export default NvidiaNimKeyRotator;
+export default NimSuperPlugin;

@@ -1,10 +1,17 @@
 import { Box, Text } from "@opentui/core";
 import pkg from "../../package.json" with { type: "json" };
-import { getActiveKeys } from "../storage.js";
 import { getActiveTheme, setPreviewTheme } from "../themes.js";
-import { state, setNavigate, setRenderApp, callRenderApp } from "./state.js";
+import { getActiveKeys } from "../storage.js";
+import {
+  state,
+  setNavigate,
+  setRenderApp,
+  callRenderApp,
+  refreshStore,
+} from "./state.js";
 import type { Screen } from "./types.js";
 import {
+  buildProviderTabs,
   buildMainMenu,
   buildKeySelector,
   buildKeyActions,
@@ -22,7 +29,6 @@ import {
   buildModelSelector,
   getFilteredModelsForSelector,
 } from "./screens.js";
-import type { ScreenContent } from "./types.js";
 import {
   handleFallbackChainKey,
   addFallbackModel,
@@ -30,7 +36,6 @@ import {
 } from "./actions.js";
 
 export function initApp(): void {
-  // Wire up navigation and render loop
   setNavigate((screen: Screen) => {
     state.currentScreen = screen;
     renderApp();
@@ -38,12 +43,12 @@ export function initApp(): void {
 
   setRenderApp(renderApp);
 
-  // Key bindings
   if (!state.renderer) return;
   state.renderer.keyInput.on(
     "keypress",
     (key: { name: string; ctrl: boolean; shift: boolean }) => {
       if (key.name === "tab") {
+        if (state.currentScreen === "provider-tabs") return;
         state.activeTab = state.activeTab === "keys" ? "fallback" : "keys";
         if (state.activeTab === "keys") {
           navigateTo("list");
@@ -54,12 +59,14 @@ export function initApp(): void {
       }
 
       if (key.name === "1") {
+        if (state.currentScreen === "provider-tabs") return;
         state.activeTab = "keys";
         navigateTo("list");
         return;
       }
 
       if (key.name === "2") {
+        if (state.currentScreen === "provider-tabs") return;
         state.activeTab = "fallback";
         navigateTo("fallback-menu");
         return;
@@ -67,7 +74,10 @@ export function initApp(): void {
 
       if (key.name === "escape") {
         switch (state.currentScreen) {
+          case "provider-tabs":
+            return;
           case "list":
+            navigateTo("provider-tabs");
             return;
           case "key-selector":
             return navigateTo("list");
@@ -112,34 +122,32 @@ export function initApp(): void {
         process.exit(0);
       }
 
-      // Fallback chain key handling
       if (state.currentScreen === "fallback-chain") {
         handleFallbackChainKey(key.name);
         return;
       }
 
-      // Model selector search handling
       if (state.currentScreen === "model-selector") {
         const filteredModels = getFilteredModelsForSelector();
         if (key.name === "up") {
           if (filteredModels.length === 0) return;
-          state.modelSelectorIndex = Math.max(0, state.modelSelectorIndex - 1);
+          state.modelSelectorIndex[state.activeProvider] = Math.max(0, state.modelSelectorIndex[state.activeProvider] - 1);
           callRenderApp();
           return;
         } else if (key.name === "down") {
           if (filteredModels.length === 0) return;
-          state.modelSelectorIndex = Math.min(
+          state.modelSelectorIndex[state.activeProvider] = Math.min(
             filteredModels.length - 1,
-            state.modelSelectorIndex + 1,
+            state.modelSelectorIndex[state.activeProvider] + 1,
           );
           callRenderApp();
           return;
         } else if (key.name === "return" || key.name === "enter") {
           if (
-            state.modelSelectorIndex >= 0 &&
-            state.modelSelectorIndex < filteredModels.length
+            state.modelSelectorIndex[state.activeProvider] >= 0 &&
+            state.modelSelectorIndex[state.activeProvider] < filteredModels.length
           ) {
-            const model = filteredModels[state.modelSelectorIndex];
+            const model = filteredModels[state.modelSelectorIndex[state.activeProvider]];
             if (model) {
               addFallbackModel(model.id, model.name);
               state.modelSearchQuery = "";
@@ -149,19 +157,17 @@ export function initApp(): void {
           return;
         } else if (key.name === "backspace") {
           state.modelSearchQuery = state.modelSearchQuery.slice(0, -1);
-          state.modelSelectorIndex = 0;
+          state.modelSelectorIndex[state.activeProvider] = 0;
           callRenderApp();
           return;
         } else if (key.name === "r" && state.modelSearchQuery === "") {
-          // Refresh model list (only when search is empty)
-          state.modelsLoaded = false;
-          state.availableModels = [];
+          state.modelsLoaded[state.activeProvider] = false;
+          state.availableModels[state.activeProvider] = [];
           callRenderApp();
           return;
         } else if (key.name && key.name.length === 1) {
-          // Single character key
           state.modelSearchQuery += key.name;
-          state.modelSelectorIndex = 0;
+          state.modelSelectorIndex[state.activeProvider] = 0;
           callRenderApp();
           return;
         }
@@ -169,7 +175,6 @@ export function initApp(): void {
     },
   );
 
-  // Initial render
   renderApp();
 }
 
@@ -198,13 +203,14 @@ function renderApp(): void {
 function doRenderApp(): void {
   if (!state.renderer) return;
   state.focusTargetId = null;
-  for (const child of state.renderer.root.getChildren())
-    child.destroyRecursively();
+  for (const child of state.renderer.root.getChildren()) child.destroyRecursively();
 
   const theme = getActiveTheme();
 
-  const { element: content, helpText }: ScreenContent = (() => {
+  const { element: content, helpText }: { element: any; helpText: string } = (() => {
     switch (state.currentScreen) {
+      case "provider-tabs":
+        return buildProviderTabs();
       case "list":
         return buildMainMenu();
       case "key-selector":
@@ -227,10 +233,10 @@ function doRenderApp(): void {
         return buildImportPathInput();
       case "confirm-import":
         return buildConfirmImport();
-      case "fallback-chain":
-        return buildFallbackChain();
       case "fallback-menu":
         return buildFallbackMenu();
+      case "fallback-chain":
+        return buildFallbackChain();
       case "fallback-settings":
         return buildFallbackSettings();
       case "model-selector":
@@ -238,34 +244,41 @@ function doRenderApp(): void {
     }
   })();
 
+  const isProviderTabs = state.currentScreen === "provider-tabs";
   const isKeysTab = state.activeTab === "keys";
 
-  const tabBar = Box(
-    { flexDirection: "row", gap: 1 },
-    Text({
-      content: "[1]",
-      fg: isKeysTab ? theme.primary : theme.textMuted,
-    }),
-    Text({
-      content: "API Key Rotation",
-      fg: isKeysTab ? theme.primary : theme.textMuted,
-    }),
-    Text({ content: " | ", fg: theme.textMuted }),
-    Text({
-      content: "[2]",
-      fg: !isKeysTab ? theme.primary : theme.textMuted,
-    }),
-    Text({
-      content: "Model Fallback Chain",
-      fg: !isKeysTab ? theme.primary : theme.textMuted,
-    }),
-  );
+  let tabBar: any;
+  if (isProviderTabs) {
+    tabBar = Box({ flexDirection: "row", gap: 2 });
+  } else {
+    tabBar = Box(
+      { flexDirection: "row", gap: 1 },
+      Text({
+        content: "[1]",
+        fg: isKeysTab ? theme.primary : theme.textMuted,
+      }),
+      Text({
+        content: "API Key Rotation",
+        fg: isKeysTab ? theme.primary : theme.textMuted,
+      }),
+      Text({ content: " | ", fg: theme.textMuted }),
+      Text({
+        content: "[2]",
+        fg: !isKeysTab ? theme.primary : theme.textMuted,
+      }),
+      Text({
+        content: "Model Fallback Chain",
+        fg: !isKeysTab ? theme.primary : theme.textMuted,
+      }),
+    );
+  }
 
+  const providerName = state.activeProvider === "nvidia" ? "NVIDIA NIM" : "Google Gemini";
   const title = Box(
     { flexDirection: "row", gap: 2 },
     Text({
       id: "title-text",
-      content: "NVIDIA NIM Key Rotator",
+      content: isProviderTabs ? "NIM Super" : `${providerName} Key Rotator`,
       fg: theme.primary,
     }),
     Text({
@@ -275,21 +288,25 @@ function doRenderApp(): void {
     }),
   );
 
+  const activeKeysCount = getActiveKeys(state.store, state.activeProvider).length;
+  const totalKeysCount = state.store.keys.filter((k) => k.provider === state.activeProvider).length;
+  const modelsCount = state.store.fallbackChains[state.activeProvider]?.length ?? 0;
+
   const status = Box(
     { flexDirection: "row", gap: 2 },
     Text({
       id: "keys-count",
-      content: `Keys: ${state.store.keys.length}`,
+      content: `Keys: ${totalKeysCount}`,
       fg: theme.textMuted,
     }),
     Text({
       id: "active-count",
-      content: `Active: ${getActiveKeys(state.store).length}`,
+      content: `Active: ${activeKeysCount}`,
       fg: theme.success,
     }),
     Text({
       id: "models-count",
-      content: `Models: ${state.store.fallbackChain.length}`,
+      content: `Models: ${modelsCount}`,
       fg: theme.textMuted,
     }),
     Text({
@@ -304,10 +321,7 @@ function doRenderApp(): void {
     }),
   );
 
-  const help = Box(
-    { flexDirection: "row" },
-    Text({ id: "help-text", content: helpText, fg: theme.textMuted }),
-  );
+  const help = Box({ flexDirection: "row" }, Text({ id: "help-text", content: helpText, fg: theme.textMuted }));
 
   state.renderer.root.add(
     Box(
@@ -342,10 +356,7 @@ function doRenderApp(): void {
   );
 
   if (state.focusTargetId) {
-    const renderable = state.renderer.root.findDescendantById(
-      state.focusTargetId,
-    );
-    if (renderable && typeof renderable.focus === "function")
-      renderable.focus();
+    const renderable = state.renderer.root.findDescendantById(state.focusTargetId);
+    if (renderable && typeof renderable.focus === "function") renderable.focus();
   }
 }

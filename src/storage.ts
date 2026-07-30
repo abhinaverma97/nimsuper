@@ -12,9 +12,11 @@ import type {
   ApiKeyEntry,
   ExportedKey,
   ExportPayload,
+  FallbackModel,
   KeyStore,
   KeyStoreConfig,
   ModelBlacklistEntry,
+  ProviderId,
 } from "./types.js";
 
 const DEFAULT_STORE_PATH = join(
@@ -33,6 +35,8 @@ const MAX_KEY_LENGTH = 256;
 const MAX_NAME_LENGTH = 128;
 const SYSTEM_PATH_PREFIXES = ["/etc/", "/proc/", "/sys/", "/dev/"];
 
+const PROVIDERS: ProviderId[] = ["nvidia", "google"];
+
 export function getDefaultStore(): KeyStore {
   return {
     keys: [],
@@ -40,7 +44,7 @@ export function getDefaultStore(): KeyStore {
     rotationStrategy: "round-robin",
     updatedAt: Date.now(),
     lastUsedKeyId: undefined,
-    fallbackChain: [],
+    fallbackChains: { nvidia: [], google: [] },
     maxRateLimitFailures: 3,
   };
 }
@@ -63,6 +67,70 @@ export function validateExportPath(filePath: string): string | null {
   return null;
 }
 
+function migrateStore(raw: any): KeyStore {
+  const store = getDefaultStore();
+
+  if (raw.keys && Array.isArray(raw.keys)) {
+    store.keys = raw.keys
+      .filter((k: any) => k !== null && typeof k === "object")
+      .map((k: any) => {
+        const kr = k as Record<string, unknown>;
+        return {
+          ...k,
+          provider: kr.provider ?? "nvidia",
+          rateLimitCount:
+            typeof k.rateLimitCount === "number" ? k.rateLimitCount : 0,
+          modelBlacklist:
+            kr.modelBlacklist && typeof kr.modelBlacklist === "object"
+              ? (kr.modelBlacklist as {
+                  [modelId: string]: ModelBlacklistEntry;
+                })
+              : undefined,
+        } as ApiKeyEntry;
+      });
+  }
+
+  if (
+    typeof raw.currentIndex === "number" &&
+    Number.isFinite(raw.currentIndex) &&
+    raw.currentIndex >= 0 &&
+    Number.isInteger(raw.currentIndex)
+  ) {
+    store.currentIndex = raw.currentIndex;
+  }
+
+  if (raw.rotationStrategy === "round-robin" || raw.rotationStrategy === "least-failures") {
+    store.rotationStrategy = raw.rotationStrategy;
+  }
+
+  if (typeof raw.updatedAt === "number") {
+    store.updatedAt = raw.updatedAt;
+  }
+
+  if (typeof raw.lastUsedKeyId === "string") {
+    store.lastUsedKeyId = raw.lastUsedKeyId;
+  }
+
+  if (raw.fallbackChain && Array.isArray(raw.fallbackChain)) {
+    store.fallbackChains = { nvidia: raw.fallbackChain, google: [] };
+  } else if (raw.fallbackChains && typeof raw.fallbackChains === "object") {
+    store.fallbackChains = {
+      nvidia: Array.isArray(raw.fallbackChains.nvidia) ? raw.fallbackChains.nvidia : [],
+      google: Array.isArray(raw.fallbackChains.google) ? raw.fallbackChains.google : [],
+    };
+  }
+
+  if (
+    typeof raw.maxRateLimitFailures === "number" &&
+    Number.isFinite(raw.maxRateLimitFailures) &&
+    raw.maxRateLimitFailures >= 1
+  ) {
+    store.maxRateLimitFailures = raw.maxRateLimitFailures;
+  }
+
+  return store;
+}
+
 export function loadStore(config?: KeyStoreConfig): KeyStore | null {
   const storePath = resolveStorePath(config);
   try {
@@ -75,54 +143,9 @@ export function loadStore(config?: KeyStoreConfig): KeyStore | null {
         );
         return null;
       }
-      const store = data as KeyStore;
-      if (!store.keys || !Array.isArray(store.keys)) {
-        console.warn(
-          `[nimsuper] Store at "${storePath}" has invalid keys format`,
-        );
-        return null;
-      }
-      if (
-        typeof store.currentIndex !== "number" ||
-        !Number.isFinite(store.currentIndex) ||
-        store.currentIndex < 0 ||
-        !Number.isInteger(store.currentIndex)
-      ) {
-        store.currentIndex = 0;
-      }
-      const built: KeyStore = {
-        ...getDefaultStore(),
-        ...store,
-        keys: Array.isArray(store.keys)
-          ? store.keys
-              .filter((k) => k !== null && typeof k === "object")
-              .map((k) => {
-                const kr = k as unknown as Record<string, unknown>;
-                return {
-                  ...k,
-                  rateLimitCount:
-                    typeof k.rateLimitCount === "number" ? k.rateLimitCount : 0,
-                  modelBlacklist:
-                    kr.modelBlacklist && typeof kr.modelBlacklist === "object"
-                      ? (kr.modelBlacklist as {
-                          [modelId: string]: ModelBlacklistEntry;
-                        })
-                      : undefined,
-                } as ApiKeyEntry;
-              })
-          : [],
-        fallbackChain: Array.isArray(store.fallbackChain)
-          ? store.fallbackChain
-          : [],
-        maxRateLimitFailures:
-          typeof store.maxRateLimitFailures === "number" &&
-          Number.isFinite(store.maxRateLimitFailures) &&
-          store.maxRateLimitFailures >= 1
-            ? store.maxRateLimitFailures
-            : getDefaultStore().maxRateLimitFailures,
-      };
-      pruneAllExpiredBlacklists(built);
-      return built;
+      const store = migrateStore(data);
+      pruneAllExpiredBlacklists(store);
+      return store;
     }
   } catch (err) {
     console.error(`[nimsuper] Failed to load store at "${storePath}":`, err);
@@ -158,7 +181,7 @@ export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
   }
 }
 
-export function addKey(store: KeyStore, name: string, key: string): void {
+export function addKey(store: KeyStore, name: string, key: string, provider: ProviderId): void {
   const entry: ApiKeyEntry = {
     id: crypto.randomUUID(),
     name,
@@ -166,6 +189,7 @@ export function addKey(store: KeyStore, name: string, key: string): void {
     createdAt: Date.now(),
     rateLimitCount: 0,
     enabled: true,
+    provider,
   };
   store.keys.push(entry);
 }
@@ -208,21 +232,27 @@ export function isKeyBlacklisted(
 
 export function getActiveKeys(
   store: KeyStore,
+  provider?: ProviderId,
   modelId?: string,
 ): ApiKeyEntry[] {
-  return store.keys.filter((k) => k.enabled && !isKeyBlacklisted(k, modelId));
+  return store.keys.filter((k) => {
+    if (!k.enabled) return false;
+    if (provider && k.provider !== provider) return false;
+    if (modelId && isKeyBlacklisted(k, modelId)) return false;
+    return true;
+  });
 }
 
 export function getNextKey(
   store: KeyStore,
   config?: KeyStoreConfig,
   modelId?: string,
+  provider?: ProviderId,
 ): { key: ApiKeyEntry; index: number } | null {
-  const active = getActiveKeys(store, modelId);
+  const active = getActiveKeys(store, provider, modelId);
   if (active.length === 0) return null;
 
-  const strategy =
-    config?.rotationStrategy ?? store.rotationStrategy ?? "round-robin";
+  const strategy = config?.rotationStrategy ?? store.rotationStrategy ?? "round-robin";
 
   if (strategy === "least-failures") {
     const now = Date.now();
@@ -248,7 +278,6 @@ export function getNextKey(
     return { key: best, index: realIdx };
   }
 
-  // round-robin
   const idx = store.currentIndex % active.length;
   const selected = active[idx];
   const realIdx = store.keys.indexOf(selected);
@@ -351,7 +380,7 @@ export function exportKeys(store: KeyStore): ExportPayload {
   return {
     version: 1,
     exportedAt: Date.now(),
-    keys: store.keys.map((k) => ({ name: k.name, key: k.key })),
+    keys: store.keys.map((k) => ({ name: k.name, key: k.key, provider: k.provider })),
   };
 }
 
@@ -473,6 +502,7 @@ export function validateImportPayload(raw: string): ImportResult {
 
     const name = ((entry as Record<string, unknown>).name as string).trim();
     const key = ((entry as Record<string, unknown>).key as string).trim();
+    const provider = ((entry as Record<string, unknown>).provider as ProviderId) ?? "nvidia";
 
     if (!name) {
       result.errors.push("Key entry has empty name");
@@ -490,12 +520,12 @@ export function validateImportPayload(raw: string): ImportResult {
       result.errors.push(`Key "${name}" exceeds maximum length`);
       continue;
     }
-    if (!key.startsWith("nvapi-")) {
+    if (provider === "nvidia" && !key.startsWith("nvapi-")) {
       result.errors.push(`Key "${name}" does not start with 'nvapi-'`);
       continue;
     }
 
-    result.pendingKeys.push({ name, key });
+    result.pendingKeys.push({ name, key, provider });
   }
 
   return result;
@@ -508,20 +538,20 @@ export function applyImport(
   let added = 0;
   let skipped = 0;
 
-  for (const { name, key } of pendingKeys) {
-    const existingByName = store.keys.find((k) => k.name === name);
+  for (const { name, key, provider } of pendingKeys) {
+    const existingByName = store.keys.find((k) => k.name === name && k.provider === provider);
     if (existingByName) {
       skipped++;
       continue;
     }
 
-    const existingByKey = store.keys.find((k) => k.key === key);
+    const existingByKey = store.keys.find((k) => k.key === key && k.provider === provider);
     if (existingByKey) {
       skipped++;
       continue;
     }
 
-    addKey(store, name, key);
+    addKey(store, name, key, provider);
     added++;
   }
 

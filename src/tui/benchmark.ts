@@ -1,7 +1,8 @@
-import type { FallbackModel } from "../types.js";
+import type { FallbackModel, ProviderId } from "../types.js";
 import { state, callRenderApp } from "./state.js";
 
 const NIM_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const GEMINI_STREAM_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const FETCH_TIMEOUT_MS = 30_000;
 const STREAM_CHUNK_TIMEOUT_MS = 30_000;
 const TPS_UPDATE_INTERVAL_MS = 2_000;
@@ -14,13 +15,7 @@ export interface BenchmarkMetrics {
   tokenCount: number;
 }
 
-export type BenchmarkPhase =
-  | "idle"
-  | "connecting"
-  | "streaming"
-  | "done"
-  | "error"
-  | "cancelled";
+export type BenchmarkPhase = "idle" | "connecting" | "streaming" | "done" | "error" | "cancelled";
 
 export interface BenchmarkState {
   phase: BenchmarkPhase;
@@ -42,6 +37,11 @@ export class BenchmarkRunner {
   private _modelId: string | undefined;
   private _cancelled = false;
   private lastGoodTps: number | undefined;
+  private provider: ProviderId;
+
+  constructor(provider: ProviderId) {
+    this.provider = provider;
+  }
 
   private setTps(value: number | undefined): void {
     if (value != null && Number.isFinite(value) && value >= 0) {
@@ -168,35 +168,49 @@ export class BenchmarkRunner {
     delete model.benchmarkError;
   }
 
-  private async execute(
-    model: FallbackModel,
-    apiKey: string,
-    gen: number,
-  ): Promise<void> {
+  private async execute(model: FallbackModel, apiKey: string, gen: number): Promise<void> {
     const signal = this.controller!.signal;
     const startTime = Date.now();
 
     const fetchTimeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
     const combinedSignal = AbortSignal.any([signal, fetchTimeout]);
 
-    const res = await fetch(NIM_CHAT_URL, {
+    const url = this.provider === "nvidia"
+      ? NIM_CHAT_URL
+      : `${GEMINI_STREAM_URL}/${model.id}:streamGenerateContent?key=${apiKey}`;
+
+    const body = this.provider === "nvidia"
+      ? JSON.stringify({
+          model: model.id,
+          messages: [
+            {
+              role: "user",
+              content:
+                "Write a function that takes an array of integers and returns the two numbers that sum to a given target. Explain your approach.",
+            },
+          ],
+          max_tokens: 1024,
+          stream: true,
+        })
+      : JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: "Write a function that takes an array of integers and returns the two numbers that sum to a given target. Explain your approach.",
+                },
+              ],
+            },
+          ],
+          generationConfig: { maxOutputTokens: 1024 },
+        });
+
+    const res = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: model.id,
-        messages: [
-          {
-            role: "user",
-            content:
-              "Write a function that takes an array of integers and returns the two numbers that sum to a given target. Explain your approach.",
-          },
-        ],
-        max_tokens: 1024,
-        stream: true,
-      }),
+      headers: this.provider === "nvidia"
+        ? { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` }
+        : { "Content-Type": "application/json" },
+      body,
       signal: combinedSignal,
     });
 
@@ -255,10 +269,7 @@ export class BenchmarkRunner {
         try {
           chunk = await reader.read();
         } catch (e) {
-          if (
-            e instanceof Error &&
-            (e.name === "AbortError" || e.name === "CanceledError")
-          ) {
+          if (e instanceof Error && (e.name === "AbortError" || e.name === "CanceledError")) {
             throw new Error("Stream timeout");
           }
           throw e;
@@ -283,7 +294,12 @@ export class BenchmarkRunner {
             if (data === "[DONE]") continue;
             try {
               const parsed = JSON.parse(data);
-              const content = parsed?.choices?.[0]?.delta?.content;
+              let content: string | undefined;
+              if (this.provider === "nvidia") {
+                content = parsed?.choices?.[0]?.delta?.content;
+              } else {
+                content = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+              }
               if (content) {
                 charCount += content.length;
                 contentChunks++;
@@ -297,10 +313,7 @@ export class BenchmarkRunner {
 
         if (charCount === 0 || contentChunks < 2) continue;
 
-        const estimatedTokens = Math.max(
-          1,
-          Math.round(charCount / CHARS_PER_TOKEN),
-        );
+        const estimatedTokens = Math.max(1, Math.round(charCount / CHARS_PER_TOKEN));
         this._metrics.tokenCount = estimatedTokens;
 
         const now = Date.now();
