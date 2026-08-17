@@ -2,7 +2,7 @@
 
 Multi-provider API key rotator and model fallback plugin for [OpenCode](https://opencode.ai).
 
-Supports **NVIDIA NIM**, **Google Gemini**, and **Google Cloud Code Antigravity (OAuth)**.
+Fork of [opencode-nim-rotator](https://github.com/ChakornK/opencode-nim-rotator) with added multi-provider support (**Google Gemini**, **Google Cloud Code Antigravity OAuth**), live quota tracking, and bug fixes.
 
 ## Features
 
