@@ -27,6 +27,7 @@ import {
   getAntigravityHeaders,
 } from "./antigravity.js";
 import { getNormalizedQuota } from "./quota.js";
+import { BASE_ANTIGRAVITY_MODELS } from "./opencode-sync.js";
 
 const PROVIDERS: ProviderId[] = ["nvidia", "google", "antigravity"];
 const NIM_BASE_URL = "https://integrate.api.nvidia.com";
@@ -529,7 +530,16 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
     auth: {
       provider: "google",
       loader: async (_getAuth, providerContext) => {
-        if (providerContext?.models) {
+        if (providerContext) {
+          if (!providerContext.models) {
+            providerContext.models = {};
+          }
+          // Dynamically inject Antigravity models so OpenCode knows about them even with empty config
+          for (const [id, def] of Object.entries(BASE_ANTIGRAVITY_MODELS)) {
+            if (!providerContext.models[id]) {
+              providerContext.models[id] = JSON.parse(JSON.stringify(def));
+            }
+          }
           try {
             reloadFromDisk();
             for (const [id, model] of Object.entries(providerContext.models)) {

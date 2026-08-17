@@ -20,6 +20,74 @@ export function getOpencodeConfigPath(): string {
 import { loadStore } from "./storage.js";
 import { getNormalizedQuota } from "./quota.js";
 
+export const BASE_ANTIGRAVITY_MODELS: Record<string, any> = {
+  "antigravity-gemini-3.7-flash": {
+    name: "Gemini 3.7 Flash (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-gemini-3.7-flash-tiered": {
+    name: "Gemini 3.7 Flash Tiered (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-gemini-3.6-flash-high": {
+    name: "Gemini 3.6 Flash High (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-gemini-3.6-flash-medium": {
+    name: "Gemini 3.6 Flash Medium (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-gemini-3.6-flash-low": {
+    name: "Gemini 3.6 Flash Low (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-gemini-pro-agent": {
+    name: "Gemini 3.1 Pro Agent (Antigravity)",
+    limit: { context: 1048576, output: 65535 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-gemini-3.1-pro-low": {
+    name: "Gemini 3.1 Pro Low (Antigravity)",
+    limit: { context: 1048576, output: 65535 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-gemini-3-flash-agent": {
+    name: "Gemini 3.5 Flash Agent (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-claude-sonnet-4-6": {
+    name: "Claude Sonnet 4.6 (Antigravity)",
+    limit: { context: 200000, output: 64000 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-claude-opus-4-6-thinking": {
+    name: "Claude Opus 4.6 Thinking (Antigravity)",
+    limit: { context: 200000, output: 64000 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-gpt-oss-120b-medium": {
+    name: "GPT-OSS 120B Medium (Antigravity)",
+    limit: { context: 131072, output: 32768 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-gemini-2.5-pro": {
+    name: "Gemini 2.5 Pro (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-gemini-2.5-flash": {
+    name: "Gemini 2.5 Flash (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  },
+};
+
 export async function syncOpencodeModels(customModels?: FallbackModel[]): Promise<{
   success: boolean;
   configPath: string;
@@ -56,73 +124,7 @@ export async function syncOpencodeModels(customModels?: FallbackModel[]): Promis
       config.provider.google.models = {};
     }
 
-    const baseModels: Record<string, any> = {
-      "antigravity-gemini-3.7-flash": {
-        name: "Gemini 3.7 Flash (Antigravity)",
-        limit: { context: 1048576, output: 65536 },
-        modalities: DEFAULT_MODALITIES,
-      },
-      "antigravity-gemini-3.7-flash-tiered": {
-        name: "Gemini 3.7 Flash Tiered (Antigravity)",
-        limit: { context: 1048576, output: 65536 },
-        modalities: DEFAULT_MODALITIES,
-      },
-      "antigravity-gemini-3.6-flash-high": {
-        name: "Gemini 3.6 Flash High (Antigravity)",
-        limit: { context: 1048576, output: 65536 },
-        modalities: DEFAULT_MODALITIES,
-      },
-      "antigravity-gemini-3.6-flash-medium": {
-        name: "Gemini 3.6 Flash Medium (Antigravity)",
-        limit: { context: 1048576, output: 65536 },
-        modalities: DEFAULT_MODALITIES,
-      },
-      "antigravity-gemini-3.6-flash-low": {
-        name: "Gemini 3.6 Flash Low (Antigravity)",
-        limit: { context: 1048576, output: 65536 },
-        modalities: DEFAULT_MODALITIES,
-      },
-      "antigravity-gemini-pro-agent": {
-        name: "Gemini 3.1 Pro Agent (Antigravity)",
-        limit: { context: 1048576, output: 65535 },
-        modalities: DEFAULT_MODALITIES,
-      },
-      "antigravity-gemini-3.1-pro-low": {
-        name: "Gemini 3.1 Pro Low (Antigravity)",
-        limit: { context: 1048576, output: 65535 },
-        modalities: DEFAULT_MODALITIES,
-      },
-      "antigravity-gemini-3-flash-agent": {
-        name: "Gemini 3.5 Flash Agent (Antigravity)",
-        limit: { context: 1048576, output: 65536 },
-        modalities: DEFAULT_MODALITIES,
-      },
-      "antigravity-claude-sonnet-4-6": {
-        name: "Claude Sonnet 4.6 (Antigravity)",
-        limit: { context: 200000, output: 64000 },
-        modalities: DEFAULT_MODALITIES,
-      },
-      "antigravity-claude-opus-4-6-thinking": {
-        name: "Claude Opus 4.6 Thinking (Antigravity)",
-        limit: { context: 200000, output: 64000 },
-        modalities: DEFAULT_MODALITIES,
-      },
-      "antigravity-gpt-oss-120b-medium": {
-        name: "GPT-OSS 120B Medium (Antigravity)",
-        limit: { context: 131072, output: 32768 },
-        modalities: DEFAULT_MODALITIES,
-      },
-      "antigravity-gemini-2.5-pro": {
-        name: "Gemini 2.5 Pro (Antigravity)",
-        limit: { context: 1048576, output: 65536 },
-        modalities: DEFAULT_MODALITIES,
-      },
-      "antigravity-gemini-2.5-flash": {
-        name: "Gemini 2.5 Flash (Antigravity)",
-        limit: { context: 1048576, output: 65536 },
-        modalities: DEFAULT_MODALITIES,
-      },
-    };
+    const baseModels: Record<string, any> = { ...BASE_ANTIGRAVITY_MODELS };
 
     if (customModels && Array.isArray(customModels)) {
       for (const m of customModels) {
