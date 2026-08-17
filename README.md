@@ -18,13 +18,7 @@ Fork of [opencode-nim-rotator](https://github.com/ChakornK/opencode-nim-rotator)
 npm install -g nimsuper
 ```
 
-Add to `~/.config/opencode/opencode.json` (or `opencode.jsonc`):
-
-```json
-{
-  "plugin": ["nimsuper"]
-}
-```
+*(The installer automatically adds `nimsuper` to your OpenCode config on install)*
 
 ## Usage
 

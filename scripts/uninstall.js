@@ -5,8 +5,11 @@ import { homedir } from "os";
 import { existsSync } from "fs";
 import { readFile, writeFile, unlink } from "fs/promises";
 
-const CONFIG_DIR = join(homedir(), ".config", "opencode");
-const CONFIG_PATH = join(CONFIG_DIR, "opencode.json");
+const xdgConfig = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+const CONFIG_DIR = join(xdgConfig, "opencode");
+const jsoncPath = join(CONFIG_DIR, "opencode.jsonc");
+const jsonPath = join(CONFIG_DIR, "opencode.json");
+const CONFIG_PATH = existsSync(jsoncPath) ? jsoncPath : jsonPath;
 const KEYSTORE_PATH = join(CONFIG_DIR, "nimsuper-keys.json");
 const THEME_PATH = join(CONFIG_DIR, "nimsuper-theme.json");
 
