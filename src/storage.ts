@@ -18,6 +18,7 @@ import type {
   ModelBlacklistEntry,
   ProviderId,
 } from "./types.js";
+import { isAccount5HrLimitExhausted } from "./quota.js";
 
 const SUPEROC_STORE_PATH = join(
   homedir(),
@@ -256,6 +257,7 @@ export function getActiveKeys(
   });
   const active = enabled.filter((k) => {
     if (modelId && isKeyBlacklisted(k, modelId)) return false;
+    if (k.provider === "antigravity" && isAccount5HrLimitExhausted(k.key, modelId)) return false;
     return true;
   });
   return active.length > 0 ? active : enabled;

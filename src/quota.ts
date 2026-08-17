@@ -1,4 +1,6 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { getAntigravityHeaders, getOrRefreshAntigravityAccessToken } from "./antigravity.js";
+import { getOpencodeConfigPath } from "./opencode-sync.js";
 import type { ApiKeyEntry } from "./types.js";
 
 export interface QuotaSummary {
@@ -6,13 +8,65 @@ export interface QuotaSummary {
   weeklyPercent: number;
 }
 
+export interface AccountModelQuota {
+  fiveHourFraction: number;
+  weeklyFraction: number;
+  resetTimeMs?: number;
+}
+
 interface CachedQuota {
   timestamp: number;
   data: QuotaSummary;
 }
 
-const QUOTA_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
+const QUOTA_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const quotaCache = new Map<string, CachedQuota>();
+const singleAccountQuotaCache = new Map<
+  string,
+  {
+    timestamp: number;
+    quotas: Map<string, AccountModelQuota>;
+  }
+>();
+
+export function isAccount5HrLimitExhausted(
+  apiKey: string,
+  modelId?: string,
+): boolean {
+  const cached = singleAccountQuotaCache.get(apiKey);
+  if (!cached) return false;
+
+  const now = Date.now();
+
+  if (!modelId) {
+    let allExhausted = true;
+    for (const q of cached.quotas.values()) {
+      const isExpired = q.resetTimeMs ? now >= q.resetTimeMs : now - cached.timestamp > QUOTA_CACHE_TTL_MS;
+      if (isExpired || q.fiveHourFraction > 0.001) {
+        allExhausted = false;
+        break;
+      }
+    }
+    return allExhausted;
+  }
+
+  const quota =
+    cached.quotas.get(modelId) ??
+    cached.quotas.get(resolveQuotaModelKey(modelId));
+  if (!quota) return false;
+
+  // If Google provided an exact resetTime and that time has passed, account is replenished
+  if (quota.resetTimeMs && now >= quota.resetTimeMs) {
+    return false;
+  }
+
+  // If cache TTL expired without resetTime, allow trying again
+  if (!quota.resetTimeMs && now - cached.timestamp > QUOTA_CACHE_TTL_MS) {
+    return false;
+  }
+
+  return quota.fiveHourFraction <= 0.001;
+}
 
 export function resolveQuotaModelKey(modelId: string): string {
   const clean = modelId.replace(/^antigravity-/, "").toLowerCase();
@@ -24,7 +78,7 @@ export function resolveQuotaModelKey(modelId: string): string {
 
 export async function fetchSingleAccountBatchQuotas(
   apiKey: string,
-): Promise<Map<string, { fiveHourFraction: number; weeklyFraction: number }> | null> {
+): Promise<Map<string, AccountModelQuota> | null> {
   try {
     const auth = await getOrRefreshAntigravityAccessToken(apiKey);
     if (!auth) return null;
@@ -54,7 +108,7 @@ export async function fetchSingleAccountBatchQuotas(
       }).catch(() => null),
     ]);
 
-    const result = new Map<string, { fiveHourFraction: number; weeklyFraction: number }>();
+    const result = new Map<string, AccountModelQuota>();
 
     let availableModelsData: any = null;
     if (modelsRes && modelsRes.ok) {
@@ -98,6 +152,11 @@ export async function fetchSingleAccountBatchQuotas(
           ? Number(modelEntry.quotaInfo.remainingFraction)
           : 1.0;
 
+      const resetTimeMs =
+        modelEntry?.quotaInfo?.resetTime
+          ? Date.parse(modelEntry.quotaInfo.resetTime)
+          : undefined;
+
       let weeklyFraction = defaultWeeklyFraction;
       if (Array.isArray(quotaBucketsData?.buckets)) {
         const matchingBucket =
@@ -108,9 +167,15 @@ export async function fetchSingleAccountBatchQuotas(
         }
       }
 
-      result.set(mId, { fiveHourFraction, weeklyFraction });
-      result.set(`antigravity-${mId}`, { fiveHourFraction, weeklyFraction });
+      const entry: AccountModelQuota = { fiveHourFraction, weeklyFraction, resetTimeMs };
+      result.set(mId, entry);
+      result.set(`antigravity-${mId}`, entry);
     }
+
+    singleAccountQuotaCache.set(apiKey, {
+      timestamp: Date.now(),
+      quotas: result,
+    });
 
     return result;
   } catch {
@@ -130,7 +195,7 @@ export async function refreshAllModelQuotas(
   );
 
   const validBatches = keyBatchResults.filter(
-    (b): b is Map<string, { fiveHourFraction: number; weeklyFraction: number }> => b != null,
+    (b): b is Map<string, AccountModelQuota> => b != null,
   );
   if (validBatches.length === 0) return;
 
@@ -155,7 +220,7 @@ export async function refreshAllModelQuotas(
   for (const mId of targetModels) {
     const fractions = validBatches
       .map((b) => b.get(mId))
-      .filter((f): f is { fiveHourFraction: number; weeklyFraction: number } => f != null);
+      .filter((f): f is AccountModelQuota => f != null);
 
     if (fractions.length === 0) continue;
 
@@ -182,6 +247,33 @@ export async function refreshAllModelQuotas(
       }
     }
   }
+
+  // Persist updated quota strings to opencode.jsonc so OpenCode displays live percentages
+  try {
+    const configPath = getOpencodeConfigPath();
+    if (existsSync(configPath)) {
+      const raw = readFileSync(configPath, "utf-8");
+      const config = JSON.parse(raw);
+      if (config.provider?.google?.models) {
+        let changed = false;
+        for (const [id, model] of Object.entries(config.provider.google.models as Record<string, any>)) {
+          const clean = id.replace(/^antigravity-/, "");
+          const cached = quotaCache.get(`${clean}:${activeKeyIds}`) ?? quotaCache.get(`${id}:${activeKeyIds}`);
+          if (cached && model) {
+            const cleanBase = (model.name ?? id).replace(/\s+5h:.*$/, "");
+            const newName = `${cleanBase} 5h: ${cached.data.fiveHourPercent}% W: ${cached.data.weeklyPercent}%`;
+            if (model.name !== newName) {
+              model.name = newName;
+              changed = true;
+            }
+          }
+        }
+        if (changed) {
+          writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+        }
+      }
+    }
+  } catch {}
 }
 
 export async function fetchSingleAccountQuota(
@@ -190,7 +282,9 @@ export async function fetchSingleAccountQuota(
 ): Promise<{ fiveHourFraction: number; weeklyFraction: number } | null> {
   const batch = await fetchSingleAccountBatchQuotas(apiKey);
   if (!batch) return null;
-  return batch.get(modelId) ?? batch.get(resolveQuotaModelKey(modelId)) ?? null;
+  const entry = batch.get(modelId) ?? batch.get(resolveQuotaModelKey(modelId));
+  if (!entry) return null;
+  return { fiveHourFraction: entry.fiveHourFraction, weeklyFraction: entry.weeklyFraction };
 }
 
 export async function getNormalizedQuota(
