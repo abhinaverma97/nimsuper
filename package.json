@@ -1,6 +1,6 @@
 {
   "name": "superoc",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Multi-provider API key & OAuth account rotator plugin for OpenCode — NVIDIA NIM, Google Gemini & Google Cloud Code Antigravity",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -21,6 +21,9 @@
     "opencode",
     "plugin",
     "superoc",
+    "nimsuper",
+    "opencode nim rotator",
+    "google rotator",
     "nvidia",
     "nim",
     "google",
