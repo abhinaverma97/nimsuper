@@ -15,7 +15,7 @@ export function openUrlInBrowser(url: string): void {
       spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
     }
   } catch (err) {
-    console.debug("[nimsuper] Failed to auto-open browser:", err);
+    console.debug("[superoc] Failed to auto-open browser:", err);
   }
 }
 
@@ -283,7 +283,7 @@ export async function refreshAntigravityAccessToken(refreshTokenKey: string): Pr
     });
 
     if (!res.ok) {
-      console.warn("[nimsuper] Antigravity token refresh failed:", res.status, await res.text());
+      console.warn("[superoc] Antigravity token refresh failed:", res.status, await res.text());
       return null;
     }
 
@@ -296,7 +296,7 @@ export async function refreshAntigravityAccessToken(refreshTokenKey: string): Pr
       projectId,
     };
   } catch (err) {
-    console.error("[nimsuper] Error refreshing Antigravity access token:", err);
+    console.error("[superoc] Error refreshing Antigravity access token:", err);
     return null;
   }
 }
@@ -470,7 +470,7 @@ export async function fetchLiveAntigravityModels(
         }
       }
     } catch (err) {
-      console.debug("[nimsuper] fetchAvailableModels failed on", endpoint, err);
+      console.debug("[superoc] fetchAvailableModels failed on", endpoint, err);
     }
   }
 

@@ -131,7 +131,7 @@ export function handleExport(filePath: string): void {
     setStatus(`Exported ${payload.keys.length} key(s) to ${path}`, theme.success);
     navigate("list");
   } catch (err) {
-    console.error("[nimsuper] Export failed:", err);
+    console.error("[superoc] Export failed:", err);
     setStatus(`Export failed: check file path and permissions`, theme.error);
     callRenderApp();
   }
@@ -201,7 +201,7 @@ async function fetchNimModels(): Promise<void> {
     }));
     state.modelsLoaded.nvidia = true;
   } catch (err) {
-    console.error("[nimsuper] Failed to fetch NVIDIA models:", err);
+    console.error("[superoc] Failed to fetch NVIDIA models:", err);
     setStatus("Failed to fetch models from NVIDIA NIM", "#FF5555");
   }
 }
@@ -240,7 +240,7 @@ async function fetchGoogleModels(): Promise<void> {
       }));
     state.modelsLoaded.google = true;
   } catch (err) {
-    console.error("[nimsuper] Failed to fetch Google models:", err);
+    console.error("[superoc] Failed to fetch Google models:", err);
     setStatus("Failed to fetch models from Google Gemini", "#FF5555");
   }
 }
@@ -263,7 +263,7 @@ async function fetchAntigravityModels(): Promise<void> {
     state.availableModels.antigravity = models;
     state.modelsLoaded.antigravity = true;
   } catch (err) {
-    console.error("[nimsuper] Failed to fetch Antigravity models:", err);
+    console.error("[superoc] Failed to fetch Antigravity models:", err);
     setStatus("Failed to fetch models from Antigravity", "#FF5555");
   }
 }

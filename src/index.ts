@@ -66,7 +66,7 @@ async function isSubagentSession(client: PluginInput["client"], sessionID: strin
     if (!data || typeof data !== "object") return false;
     return (data as Record<string, unknown>)?.parentID !== undefined;
   } catch (err) {
-    console.debug(`[nimsuper] isSubagentSession failed for ${sessionID}:`, err);
+    console.debug(`[superoc] isSubagentSession failed for ${sessionID}:`, err);
     return false;
   }
 }
@@ -120,7 +120,7 @@ export const SuperocPlugin: Plugin = async (input: PluginInput, options?: Record
     try {
       fresh = loadStore(config);
     } catch (err) {
-      console.debug("[nimsuper] Failed to reload store from disk:", err);
+      console.debug("[superoc] Failed to reload store from disk:", err);
       return;
     }
     if (fresh === null) return;
@@ -142,7 +142,7 @@ export const SuperocPlugin: Plugin = async (input: PluginInput, options?: Record
           ? fresh.maxRateLimitFailures
           : getDefaultStore().maxRateLimitFailures;
     } catch (err) {
-      console.debug("[nimsuper] Failed to apply reloaded store:", err);
+      console.debug("[superoc] Failed to apply reloaded store:", err);
     }
   };
 
@@ -150,7 +150,7 @@ export const SuperocPlugin: Plugin = async (input: PluginInput, options?: Record
     try {
       saveStore(store, config);
     } catch (err) {
-      console.error("[nimsuper] Failed to save store:", err);
+      console.error("[superoc] Failed to save store:", err);
     }
   };
 
@@ -172,7 +172,7 @@ export const SuperocPlugin: Plugin = async (input: PluginInput, options?: Record
     try {
       await client.tui?.showToast?.({ body: { title: "Model Fallback", message, variant } });
     } catch (err) {
-      console.debug("[nimsuper] showToast failed:", err);
+      console.debug("[superoc] showToast failed:", err);
     }
   };
 
@@ -313,12 +313,12 @@ export const SuperocPlugin: Plugin = async (input: PluginInput, options?: Record
       try {
         await client.session.abort({ path: { id: sessionID } });
       } catch (abortErr) {
-        console.debug(`[nimsuper] abort failed for ${sessionID}:`, abortErr);
+        console.debug(`[superoc] abort failed for ${sessionID}:`, abortErr);
       }
 
       const idle = await waitForSessionIdle(sessionID);
       if (!idle) {
-        console.debug(`[nimsuper] session ${sessionID} did not go idle after abort`);
+        console.debug(`[superoc] session ${sessionID} did not go idle after abort`);
         state.pendingRetryIndex = undefined;
         return false;
       }
@@ -338,7 +338,7 @@ export const SuperocPlugin: Plugin = async (input: PluginInput, options?: Record
 
       return true;
     } catch (err) {
-      console.debug(`[nimsuper] triggerRetry failed for ${sessionID}:`, err);
+      console.debug(`[superoc] triggerRetry failed for ${sessionID}:`, err);
       state.pendingRetryIndex = undefined;
       return false;
     } finally {
@@ -685,7 +685,7 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
               const res = await fetch(`${NIM_BASE_URL}/v1/models`, { headers: { Authorization: `Bearer ${key}` } });
               if (!res.ok) return { type: "failed" };
             } catch (err) {
-              console.debug("[nimsuper] authorize fetch failed:", err);
+              console.debug("[superoc] authorize fetch failed:", err);
               return { type: "failed" };
             }
             return { type: "success", key, provider: "nvidia" };

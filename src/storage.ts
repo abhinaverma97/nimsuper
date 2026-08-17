@@ -153,7 +153,7 @@ export function loadStore(config?: KeyStoreConfig): KeyStore | null {
       const data = JSON.parse(raw);
       if (typeof data !== "object" || data === null) {
         console.warn(
-          `[nimsuper] Store at "${storePath}" is not a valid object`,
+          `[superoc] Store at "${storePath}" is not a valid object`,
         );
         return null;
       }
@@ -162,7 +162,7 @@ export function loadStore(config?: KeyStoreConfig): KeyStore | null {
       return store;
     }
   } catch (err) {
-    console.error(`[nimsuper] Failed to load store at "${storePath}":`, err);
+    console.error(`[superoc] Failed to load store at "${storePath}":`, err);
   }
   return null;
 }
@@ -187,7 +187,7 @@ export function saveStore(store: KeyStore, config?: KeyStoreConfig): void {
       unlinkSync(tmpPath);
     } catch (cleanupErr) {
       console.debug(
-        `[nimsuper] Failed to clean up tmp file ${tmpPath}:`,
+        `[superoc] Failed to clean up tmp file ${tmpPath}:`,
         cleanupErr,
       );
     }
@@ -423,7 +423,7 @@ export function writeExportFile(
       unlinkSync(tmpPath);
     } catch (cleanupErr) {
       console.debug(
-        `[nimsuper] Failed to clean up tmp file ${tmpPath}:`,
+        `[superoc] Failed to clean up tmp file ${tmpPath}:`,
         cleanupErr,
       );
     }
@@ -445,7 +445,7 @@ export function readAndValidateImportFile(
   try {
     raw = readFileSync(resolved, "utf-8");
   } catch (err) {
-    console.debug(`[nimsuper] Cannot read import file ${resolved}:`, err);
+    console.debug(`[superoc] Cannot read import file ${resolved}:`, err);
     return { error: "Cannot read file" };
   }
   return { raw };
@@ -477,7 +477,7 @@ export function validateImportPayload(raw: string): ImportResult {
   try {
     data = JSON.parse(raw);
   } catch (err) {
-    console.debug("[nimsuper] Import file invalid JSON:", err);
+    console.debug("[superoc] Import file invalid JSON:", err);
     result.errors.push("Invalid JSON format");
     return result;
   }
