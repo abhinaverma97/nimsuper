@@ -594,7 +594,7 @@ export function buildExportPathInput(): ScreenContent {
   const theme = getActiveTheme();
   const provider = state.activeProvider;
   const providerKeys = state.store.keys.filter((k) => k.provider === provider);
-  const defaultPath = `~/nim-${provider}-keys-export.json`;
+  const defaultPath = `~/superoc-${provider}-keys-export.json`;
   const input = themedInput("export-path-input", defaultPath, 55);
 
   events(input).on("enter", (value: string) => {
@@ -626,7 +626,7 @@ export function buildExportPathInput(): ScreenContent {
 
 export function buildImportPathInput(): ScreenContent {
   const theme = getActiveTheme();
-  const input = themedInput("import-path-input", "~/nim-keys-export.json", 55);
+  const input = themedInput("import-path-input", "~/superoc-keys-export.json", 55);
 
   events(input).on("enter", (value: string) => {
     let filePath = value.trim();

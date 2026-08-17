@@ -314,7 +314,7 @@ function doRenderApp(): void {
     { flexDirection: "row", gap: 2 },
     Text({
       id: "title-text",
-      content: isProviderTabs ? "NIM Super" : `${providerName} Key Rotator`,
+      content: isProviderTabs ? "SuperOC" : `${providerName} Key Rotator`,
       fg: theme.primary,
     }),
     Text({
