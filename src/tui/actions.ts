@@ -18,6 +18,15 @@ import {
   clampIndex,
 } from "./state.js";
 import type { ProviderId } from "../types.js";
+import {
+  authorizeAntigravity,
+  exchangeAntigravity,
+  getOrRefreshAntigravityAccessToken,
+  fetchLiveAntigravityModels,
+  startLocalCallbackServer,
+  openUrlInBrowser,
+} from "../antigravity.js";
+import { syncOpencodeModels } from "../opencode-sync.js";
 
 export function handleKeyAction(action: string): void {
   if (!state.selectedKeyId) return;
@@ -51,7 +60,7 @@ export function handleKeyAction(action: string): void {
   }
 }
 
-export function handleMenuSelect(value: string): void {
+export async function handleMenuSelect(value: string): Promise<void> {
   const theme = getActiveTheme();
   const provider = state.activeProvider;
 
@@ -82,6 +91,16 @@ export function handleMenuSelect(value: string): void {
       setPreviewTheme(null);
       navigate("theme-selector");
       break;
+    case "sync-models": {
+      const res = await syncOpencodeModels(state.store.fallbackChains.antigravity);
+      if (res.success) {
+        setStatus(`Synced ${res.count} models to opencode.json`, theme.success);
+      } else {
+        setStatus(`Sync failed: ${res.error}`, theme.error);
+      }
+      navigate("list");
+      break;
+    }
     case "export":
       navigate("export-path");
       break;
@@ -89,6 +108,10 @@ export function handleMenuSelect(value: string): void {
       navigate("import-path");
       break;
     case "quit":
+      if (state.oauthCleanup) {
+        state.oauthCleanup();
+        state.oauthCleanup = null;
+      }
       if (state.renderer) state.renderer.destroy();
       process.exit(0);
   }
@@ -151,8 +174,10 @@ export function handleFallbackMenuSelect(value: string): void {
 export async function fetchModels(provider: ProviderId): Promise<void> {
   if (provider === "nvidia") {
     await fetchNimModels();
-  } else {
+  } else if (provider === "google") {
     await fetchGoogleModels();
+  } else {
+    await fetchAntigravityModels();
   }
 }
 
@@ -217,6 +242,29 @@ async function fetchGoogleModels(): Promise<void> {
   } catch (err) {
     console.error("[nimsuper] Failed to fetch Google models:", err);
     setStatus("Failed to fetch models from Google Gemini", "#FF5555");
+  }
+}
+
+async function fetchAntigravityModels(): Promise<void> {
+  const antigravityKey =
+    state.store.keys.find((k) => k.provider === "antigravity" && k.enabled)?.key ||
+    process.env.ANTIGRAVITY_API_KEY;
+
+  let accessToken: string | undefined;
+  let projectId: string | undefined;
+  if (antigravityKey) {
+    const auth = await getOrRefreshAntigravityAccessToken(antigravityKey);
+    accessToken = auth?.accessToken;
+    projectId = auth?.projectId;
+  }
+
+  try {
+    const models = await fetchLiveAntigravityModels(accessToken, projectId);
+    state.availableModels.antigravity = models;
+    state.modelsLoaded.antigravity = true;
+  } catch (err) {
+    console.error("[nimsuper] Failed to fetch Antigravity models:", err);
+    setStatus("Failed to fetch models from Antigravity", "#FF5555");
   }
 }
 
@@ -295,9 +343,20 @@ export async function startBenchmark(): Promise<void> {
   }
 
   const model = chain[idx];
-  const apiKey =
+  let apiKey =
     state.store.keys.find((k) => k.enabled && k.provider === provider)?.key ||
-    (provider === "nvidia" ? process.env.NVIDIA_API_KEY : process.env.GOOGLE_API_KEY);
+    (provider === "nvidia"
+      ? process.env.NVIDIA_API_KEY
+      : provider === "google"
+      ? process.env.GOOGLE_API_KEY
+      : process.env.ANTIGRAVITY_API_KEY);
+
+  if (provider === "antigravity" && apiKey) {
+    const auth = await getOrRefreshAntigravityAccessToken(apiKey);
+    if (auth?.accessToken) {
+      apiKey = `${auth.accessToken}|${auth.projectId}`;
+    }
+  }
 
   if (!apiKey) {
     setStatus(`No API key available for ${getProviderDisplayName(provider)} benchmarking`, getActiveTheme().error);
@@ -330,8 +389,49 @@ export async function startBenchmark(): Promise<void> {
   }
 }
 
-function getProviderDisplayName(provider: ProviderId): string {
-  return provider === "nvidia" ? "NVIDIA NIM" : "Google Gemini";
+export function getProviderDisplayName(provider: ProviderId): string {
+  if (provider === "nvidia") return "NVIDIA NIM";
+  if (provider === "google") return "Google Gemini";
+  return "Antigravity (Google OAuth)";
+}
+
+export function handleStartOAuthLogin(): void {
+  if (state.oauthCleanup) {
+    state.oauthCleanup();
+    state.oauthCleanup = null;
+  }
+
+  const auth = authorizeAntigravity();
+  state.pendingOAuthUrl = auth.url;
+  state.pendingOAuthState = auth.state;
+
+  openUrlInBrowser(auth.url);
+
+  state.oauthCleanup = startLocalCallbackServer(async (code, stateStr) => {
+    try {
+      const res = await exchangeAntigravity(code, stateStr || state.pendingOAuthState);
+      if (res.type === "success") {
+        const name = state.pendingKeyName || res.email || "antigravity-account";
+        addKey(state.store, name, res.refresh, "antigravity");
+        safeSaveStore();
+        refreshStore();
+        await syncOpencodeModels(state.store.fallbackChains.antigravity);
+        setStatus(`Added Antigravity account "${name}" & synced models`, getActiveTheme().success);
+        state.pendingKeyName = "";
+        state.pendingOAuthUrl = "";
+        state.pendingOAuthState = "";
+        navigate("list");
+      } else {
+        setStatus(`OAuth failed: ${res.error}`, getActiveTheme().error);
+        callRenderApp();
+      }
+    } catch (err) {
+      setStatus(`OAuth error: ${err instanceof Error ? err.message : String(err)}`, getActiveTheme().error);
+      callRenderApp();
+    }
+  });
+
+  navigate("oauth-login");
 }
 
 export function handleFallbackChainKey(keyName: string): void {

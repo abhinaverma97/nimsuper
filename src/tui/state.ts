@@ -38,6 +38,9 @@ export const state: {
   availableModels: ProviderRecord<{ id: string; name: string }[]>;
   modelsLoaded: ProviderRecord<boolean>;
   benchmarkRunners: Map<string, BenchmarkRunner>;
+  pendingOAuthUrl: string;
+  pendingOAuthState: string;
+  oauthCleanup: (() => void) | null;
 } = {
   store: loadStore() ?? getDefaultStore(),
   currentScreen: "provider-tabs",
@@ -59,15 +62,18 @@ export const state: {
   isRendering: false,
   renderPending: false,
   renderer: null,
-  fallbackChainIndex: { nvidia: 0, google: 0 },
-  fallbackChainScrollOffset: { nvidia: 0, google: 0 },
+  fallbackChainIndex: { nvidia: 0, google: 0, antigravity: 0 },
+  fallbackChainScrollOffset: { nvidia: 0, google: 0, antigravity: 0 },
   fallbackSettingsIndex: 0,
-  modelSelectorIndex: { nvidia: 0, google: 0 },
-  modelSelectorScrollOffset: { nvidia: 0, google: 0 },
+  modelSelectorIndex: { nvidia: 0, google: 0, antigravity: 0 },
+  modelSelectorScrollOffset: { nvidia: 0, google: 0, antigravity: 0 },
   modelSearchQuery: "",
-  availableModels: { nvidia: [], google: [] },
-  modelsLoaded: { nvidia: false, google: false },
+  availableModels: { nvidia: [], google: [], antigravity: [] },
+  modelsLoaded: { nvidia: false, google: false, antigravity: false },
   benchmarkRunners: new Map(),
+  pendingOAuthUrl: "",
+  pendingOAuthState: "",
+  oauthCleanup: null,
 };
 
 let navigateImpl: ((screen: Screen) => void) | null = null;

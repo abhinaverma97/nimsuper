@@ -19,8 +19,16 @@ import {
   shouldRetryForError,
   type SessionState,
 } from "./errors.js";
+import { detectProviderForRequest, getProviderHeaders } from "./provider.js";
+import {
+  authorizeAntigravity,
+  exchangeAntigravity,
+  getOrRefreshAntigravityAccessToken,
+  getAntigravityHeaders,
+} from "./antigravity.js";
+import { getNormalizedQuota } from "./quota.js";
 
-const PROVIDERS: ProviderId[] = ["nvidia", "google"];
+const PROVIDERS: ProviderId[] = ["nvidia", "google", "antigravity"];
 const NIM_BASE_URL = "https://integrate.api.nvidia.com";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 const VALID_STRATEGIES = ["round-robin", "least-failures"] as const;
@@ -34,27 +42,17 @@ function modelKey(model: { providerID: string; modelID: string }): string {
 }
 
 function getEnvKeyName(provider: ProviderId): string {
-  return provider === "nvidia" ? "NVIDIA_API_KEY" : "GOOGLE_API_KEY";
+  if (provider === "nvidia") return "NVIDIA_API_KEY";
+  if (provider === "google") return "GOOGLE_API_KEY";
+  return "ANTIGRAVITY_API_KEY";
 }
 
 function isProviderRequest(provider: ProviderId, modelApiStr: string, providerId: string | undefined, modelProviderId: string | undefined): boolean {
-  if (provider === "nvidia") {
-    return (
-      modelApiStr.includes("nvidia.com") ||
-      !!(providerId && providerId.toLowerCase().includes("nvidia")) ||
-      !!(modelProviderId && modelProviderId.toLowerCase().includes("nvidia"))
-    );
-  }
-  if (provider === "google") {
-    return (
-      modelApiStr.includes("googleapis.com") ||
-      modelApiStr.includes("generativelanguage") ||
-      !!(providerId && providerId.toLowerCase().includes("google")) ||
-      !!(modelProviderId && modelProviderId.toLowerCase().includes("google")) ||
-      !!(modelProviderId && modelProviderId.toLowerCase().includes("gemini"))
-    );
-  }
-  return false;
+  const detected = detectProviderForRequest({
+    provider: { info: { id: providerId } },
+    model: { providerID: modelProviderId, api: modelApiStr },
+  });
+  return detected === provider;
 }
 
 async function isSubagentSession(client: PluginInput["client"], sessionID: string): Promise<boolean> {
@@ -113,7 +111,7 @@ export const NimSuperPlugin: Plugin = async (input: PluginInput, options?: Recor
   };
 
   const store = loadStore(config) ?? getDefaultStore();
-  if (!store.fallbackChains) store.fallbackChains = { nvidia: [], google: [] };
+  if (!store.fallbackChains) store.fallbackChains = { nvidia: [], google: [], antigravity: [] };
 
   const sessions = new Map<string, SessionState>();
 
@@ -135,6 +133,7 @@ export const NimSuperPlugin: Plugin = async (input: PluginInput, options?: Recor
       store.fallbackChains = {
         nvidia: Array.isArray(fresh.fallbackChains?.nvidia) ? fresh.fallbackChains.nvidia : [],
         google: Array.isArray(fresh.fallbackChains?.google) ? fresh.fallbackChains.google : [],
+        antigravity: Array.isArray(fresh.fallbackChains?.antigravity) ? fresh.fallbackChains.antigravity : [],
       };
       store.maxRateLimitFailures =
         typeof fresh.maxRateLimitFailures === "number" &&
@@ -211,6 +210,7 @@ export const NimSuperPlugin: Plugin = async (input: PluginInput, options?: Recor
       lastErrorHandledAt: 0,
       createdAt: Date.now(),
       sessionProviderId: undefined,
+      lastUsedKeyId: undefined,
     };
     sessions.set(sessionID, next);
     return next;
@@ -352,11 +352,11 @@ export const NimSuperPlugin: Plugin = async (input: PluginInput, options?: Recor
     const sessionID = props?.sessionID as string | undefined;
 
     if (is429Error(error)) {
-      const errorKeyId = store.lastUsedKeyId;
+      const stateForBlacklist = sessionID ? sessions.get(sessionID) : undefined;
+      const errorKeyId = stateForBlacklist?.lastUsedKeyId ?? store.lastUsedKeyId;
       reloadFromDisk();
       if (errorKeyId) {
         recordRateLimit(store, errorKeyId);
-        const stateForBlacklist = sessionID ? sessions.get(sessionID) : undefined;
         const modelForBlacklist = stateForBlacklist?.currentModelId ?? stateForBlacklist?.activeChainModelId;
         if (modelForBlacklist) {
           recordModelRateLimit(store, errorKeyId, modelForBlacklist);
@@ -418,11 +418,12 @@ export const NimSuperPlugin: Plugin = async (input: PluginInput, options?: Recor
     if (await isSubagentSessionCached(client, sessionID)) return;
 
     reloadFromDisk();
-    if (store.lastUsedKeyId) {
-      recordRateLimit(store, store.lastUsedKeyId);
+    const errorKeyId = state?.lastUsedKeyId ?? store.lastUsedKeyId;
+    if (errorKeyId) {
+      recordRateLimit(store, errorKeyId);
       const modelForBlacklist = state.currentModelId ?? state.activeChainModelId;
       if (modelForBlacklist) {
-        recordModelRateLimit(store, store.lastUsedKeyId, modelForBlacklist);
+        recordModelRateLimit(store, errorKeyId, modelForBlacklist);
       }
       state.lastFailedModelId = modelForBlacklist;
     }
@@ -453,7 +454,7 @@ export const NimSuperPlugin: Plugin = async (input: PluginInput, options?: Recor
     if (now - state.lastErrorHandledAt < ERROR_DEDUP_WINDOW_MS) return;
     state.lastErrorHandledAt = now;
 
-    const errorKeyId = store.lastUsedKeyId;
+    const errorKeyId = state?.lastUsedKeyId ?? store.lastUsedKeyId;
     reloadFromDisk();
     if (errorKeyId) {
       recordRateLimit(store, errorKeyId);
@@ -477,9 +478,202 @@ export const NimSuperPlugin: Plugin = async (input: PluginInput, options?: Recor
     await triggerRetry(sessionID, state, reason);
   };
 
+function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = "";
+
+  return new TransformStream({
+    transform(chunk, controller) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (line.startsWith("data:")) {
+          const jsonStr = line.slice(5).trim();
+          if (!jsonStr) {
+            controller.enqueue(encoder.encode(line + "\n"));
+            continue;
+          }
+          try {
+            const parsed = JSON.parse(jsonStr);
+            if (parsed.response !== undefined) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsed.response)}\n`));
+              continue;
+            }
+          } catch {}
+        }
+        controller.enqueue(encoder.encode(line + "\n"));
+      }
+    },
+    flush(controller) {
+      if (buffer.length > 0) {
+        if (buffer.startsWith("data:")) {
+          const jsonStr = buffer.slice(5).trim();
+          try {
+            const parsed = JSON.parse(jsonStr);
+            if (parsed.response !== undefined) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsed.response)}\n`));
+              return;
+            }
+          } catch {}
+        }
+        controller.enqueue(encoder.encode(buffer));
+      }
+    },
+  });
+}
+
   const hooks: Hooks = {
     auth: {
-      provider: "nvidia",
+      provider: "google",
+      loader: async (_getAuth, providerContext) => {
+        if (providerContext?.models) {
+          try {
+            reloadFromDisk();
+            for (const [id, model] of Object.entries(providerContext.models)) {
+              if (id.startsWith("antigravity-") && model) {
+                const quota = await getNormalizedQuota(store.keys, id);
+                const cleanBase = (model.name ?? id).replace(/\s+5h:.*$/, "");
+                model.name = `${cleanBase} 5h: ${quota.fiveHourPercent}% W: ${quota.weeklyPercent}%`;
+              }
+            }
+          } catch {}
+        }
+
+        return {
+          apiKey: "",
+          async fetch(input: string | URL | Request, init?: RequestInit) {
+            const urlString =
+              typeof input === "string"
+                ? input
+                : input instanceof URL
+                  ? input.toString()
+                  : (input as Request).url;
+
+            if (urlString.includes("generativelanguage.googleapis.com")) {
+              const match = urlString.match(/\/models\/([^:]+):(\w+)/);
+              const rawModel = match ? match[1] : "";
+              const action = match ? match[2] : "streamGenerateContent";
+              const isStreaming = action === "streamGenerateContent" || urlString.includes("alt=sse");
+
+              const isAntigravityModel =
+                rawModel.startsWith("antigravity-") ||
+                /claude|gpt-oss|gemini-3|gemini-pro-agent/i.test(rawModel);
+
+              reloadFromDisk();
+              const activeAntigravityKeys = getActiveKeys(store, "antigravity");
+
+              if (isAntigravityModel || activeAntigravityKeys.length > 0) {
+                let attempts = 0;
+                const maxAttempts = Math.max(1, activeAntigravityKeys.length);
+                while (attempts < maxAttempts) {
+                  attempts++;
+                  const next = getNextKey(store, config, rawModel, "antigravity");
+                  if (!next) break;
+
+                  const authRes = await getOrRefreshAntigravityAccessToken(next.key.key);
+                  if (!authRes) {
+                    recordRateLimit(store, next.key.id);
+                    safeSaveStore();
+                    continue;
+                  }
+
+                  const effectiveModel = rawModel.replace(/^antigravity-/, "");
+
+                  let bodyStr = init?.body;
+                  let parsedBody = typeof bodyStr === "string" ? JSON.parse(bodyStr) : bodyStr;
+                  const wrappedBody = JSON.stringify({
+                    project: authRes.projectId || "rising-fact-p41fc",
+                    model: effectiveModel,
+                    request: parsedBody,
+                    requestType: "agent",
+                    userAgent: "antigravity",
+                  });
+
+                  const headers = new Headers(init?.headers ?? {});
+                  headers.set("Authorization", `Bearer ${authRes.accessToken}`);
+                  headers.set(
+                    "User-Agent",
+                    `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Antigravity/1.18.3 Chrome/138.0.7204.235 Electron/37.3.1 Safari/537.36`,
+                  );
+                  headers.set("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1");
+                  headers.set(
+                    "Client-Metadata",
+                    `{"ideType":"ANTIGRAVITY","platform":"WINDOWS","pluginType":"GEMINI"}`,
+                  );
+                  headers.delete("x-goog-api-key");
+                  headers.delete("x-api-key");
+                  headers.delete("x-goog-user-project");
+                  if (isStreaming) headers.set("Accept", "text/event-stream");
+
+                  const endpoints = [
+                    "https://daily-cloudcode-pa.sandbox.googleapis.com",
+                    "https://cloudcode-pa.googleapis.com",
+                  ];
+
+                  let gotRes: Response | null = null;
+                  for (const ep of endpoints) {
+                    const transformedUrl = `${ep}/v1internal:${action}${isStreaming ? "?alt=sse" : ""}`;
+                    const r = await fetch(transformedUrl, {
+                      ...init,
+                      headers,
+                      body: wrappedBody,
+                    });
+                    if (r.ok) {
+                      gotRes = r;
+                      break;
+                    }
+                    if (r.status === 429) {
+                      gotRes = r;
+                    }
+                  }
+
+                  if (gotRes && gotRes.ok) {
+                    // Update in-memory quota labels in background after successful response
+                    if (providerContext?.models) {
+                      setTimeout(async () => {
+                        try {
+                          reloadFromDisk();
+                          const freshQuota = await getNormalizedQuota(store.keys, rawModel, true);
+                          const targetModel =
+                            providerContext.models[rawModel] ??
+                            providerContext.models[`antigravity-${rawModel}`];
+                          if (targetModel) {
+                            const cleanBase = (targetModel.name ?? rawModel).replace(/\s+5h:.*$/, "");
+                            targetModel.name = `${cleanBase} 5h: ${freshQuota.fiveHourPercent}% W: ${freshQuota.weeklyPercent}%`;
+                          }
+                        } catch {}
+                      }, 2000);
+                    }
+
+                    if (isStreaming && gotRes.body) {
+                      const transformedStream = gotRes.body.pipeThrough(createSseUnwrapTransform());
+                      return new Response(transformedStream, {
+                        status: gotRes.status,
+                        statusText: gotRes.statusText,
+                        headers: gotRes.headers,
+                      });
+                    }
+                    return gotRes;
+                  }
+
+                  if (gotRes && gotRes.status === 429) {
+                    recordRateLimit(store, next.key.id);
+                    safeSaveStore();
+                    continue;
+                  }
+
+                  if (gotRes) return gotRes;
+                }
+              }
+            }
+
+            return fetch(input as any, init);
+          },
+        };
+      },
       methods: [
         {
           type: "api",
@@ -497,21 +691,35 @@ export const NimSuperPlugin: Plugin = async (input: PluginInput, options?: Recor
             return { type: "success", key, provider: "nvidia" };
           },
         },
+        {
+          type: "oauth",
+          label: "OAuth with Google (Antigravity)",
+          async authorize() {
+            const auth = authorizeAntigravity();
+            return {
+              url: auth.url,
+              instructions: "Log in with your Google account in your browser",
+              method: "code" as const,
+              async callback(code: string) {
+                const res = await exchangeAntigravity(code, auth.state);
+                if (res.type === "success") {
+                  return {
+                    type: "success" as const,
+                    refresh: res.refresh,
+                    access: res.access,
+                    expires: res.expires,
+                    provider: "antigravity",
+                  };
+                }
+                return { type: "failed" as const };
+              },
+            };
+          },
+        },
       ],
     },
     "chat.headers": async (_input, _output) => {
-      const providerId = _input?.provider?.info?.id;
-      const modelApi = (_input.model as Record<string, unknown>)?.api;
-      const modelProviderId = _input.model?.providerID;
-      const modelApiStr = typeof modelApi === "string"
-        ? modelApi
-        : modelApi && typeof modelApi === "object"
-          ? ((modelApi as Record<string, unknown>)?.url as string) ?? ""
-          : "";
-
-      const isNvidia = isProviderRequest("nvidia", modelApiStr, providerId, modelProviderId);
-      const isGoogle = isProviderRequest("google", modelApiStr, providerId, modelProviderId);
-      const provider = isNvidia ? "nvidia" : isGoogle ? "google" : null;
+      const provider = detectProviderForRequest(_input);
       if (!provider) return;
 
       reloadFromDisk();
@@ -519,7 +727,16 @@ export const NimSuperPlugin: Plugin = async (input: PluginInput, options?: Recor
       const modelIdForRotation = _input.model?.id;
       const next = getNextKey(store, config, modelIdForRotation, provider);
       if (next) {
-        _output.headers["Authorization"] = `Bearer ${next.key.key}`;
+        if (provider === "antigravity") {
+          const authRes = await getOrRefreshAntigravityAccessToken(next.key.key);
+          if (authRes) {
+            const headers = getAntigravityHeaders(authRes.accessToken, authRes.projectId);
+            Object.assign(_output.headers, headers);
+          }
+        } else {
+          const headers = getProviderHeaders(provider, next.key.key);
+          Object.assign(_output.headers, headers);
+        }
         if (prevKeyId && prevKeyId !== next.key.id) {
           resetRateLimit(store, prevKeyId);
         }
@@ -528,6 +745,9 @@ export const NimSuperPlugin: Plugin = async (input: PluginInput, options?: Recor
       if (modelIdForRotation && _input.sessionID) {
         const state = getState(_input.sessionID);
         state.currentModelId = modelIdForRotation;
+        if (next) {
+          state.lastUsedKeyId = next.key.id;
+        }
       }
     },
     "chat.message": async (input, output) => {

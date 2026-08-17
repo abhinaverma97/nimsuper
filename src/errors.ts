@@ -12,6 +12,7 @@ export interface SessionState {
   lastErrorHandledAt: number;
   createdAt: number;
   sessionProviderId: string | undefined;
+  lastUsedKeyId?: string;
 }
 
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);

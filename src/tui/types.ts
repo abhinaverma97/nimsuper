@@ -8,6 +8,7 @@ export type Screen =
   | "key-actions"
   | "add-name"
   | "add-key"
+  | "oauth-login"
   | "rename"
   | "confirm-delete"
   | "theme-selector"

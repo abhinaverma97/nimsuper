@@ -31,11 +31,11 @@ const MODEL_BLACKLIST_ESCALATION = 1.5;
 
 const MAX_IMPORT_SIZE = 1024 * 1024;
 const MAX_IMPORT_KEYS = 100;
-const MAX_KEY_LENGTH = 256;
+const MAX_KEY_LENGTH = 1024;
 const MAX_NAME_LENGTH = 128;
 const SYSTEM_PATH_PREFIXES = ["/etc/", "/proc/", "/sys/", "/dev/"];
 
-const PROVIDERS: ProviderId[] = ["nvidia", "google"];
+const PROVIDERS: ProviderId[] = ["nvidia", "google", "antigravity"];
 
 export function getDefaultStore(): KeyStore {
   return {
@@ -44,7 +44,7 @@ export function getDefaultStore(): KeyStore {
     rotationStrategy: "round-robin",
     updatedAt: Date.now(),
     lastUsedKeyId: undefined,
-    fallbackChains: { nvidia: [], google: [] },
+    fallbackChains: { nvidia: [], google: [], antigravity: [] },
     maxRateLimitFailures: 3,
   };
 }
@@ -112,11 +112,12 @@ function migrateStore(raw: any): KeyStore {
   }
 
   if (raw.fallbackChain && Array.isArray(raw.fallbackChain)) {
-    store.fallbackChains = { nvidia: raw.fallbackChain, google: [] };
+    store.fallbackChains = { nvidia: raw.fallbackChain, google: [], antigravity: [] };
   } else if (raw.fallbackChains && typeof raw.fallbackChains === "object") {
     store.fallbackChains = {
       nvidia: Array.isArray(raw.fallbackChains.nvidia) ? raw.fallbackChains.nvidia : [],
       google: Array.isArray(raw.fallbackChains.google) ? raw.fallbackChains.google : [],
+      antigravity: Array.isArray(raw.fallbackChains.antigravity) ? raw.fallbackChains.antigravity : [],
     };
   }
 
@@ -235,12 +236,16 @@ export function getActiveKeys(
   provider?: ProviderId,
   modelId?: string,
 ): ApiKeyEntry[] {
-  return store.keys.filter((k) => {
+  const enabled = store.keys.filter((k) => {
     if (!k.enabled) return false;
     if (provider && k.provider !== provider) return false;
+    return true;
+  });
+  const active = enabled.filter((k) => {
     if (modelId && isKeyBlacklisted(k, modelId)) return false;
     return true;
   });
+  return active.length > 0 ? active : enabled;
 }
 
 export function getNextKey(

@@ -1,4 +1,4 @@
-export type ProviderId = "nvidia" | "google";
+export type ProviderId = "nvidia" | "google" | "antigravity";
 
 export interface ModelBlacklistEntry {
   readonly blacklistedUntil: number;

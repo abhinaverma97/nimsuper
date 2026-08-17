@@ -1,8 +1,10 @@
 import type { FallbackModel, ProviderId } from "../types.js";
 import { state, callRenderApp } from "./state.js";
+import { getAntigravityHeaders, getOrRefreshAntigravityAccessToken } from "../antigravity.js";
 
 const NIM_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const GEMINI_STREAM_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+const ANTIGRAVITY_STREAM_URL = "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse";
 const FETCH_TIMEOUT_MS = 30_000;
 const STREAM_CHUNK_TIMEOUT_MS = 30_000;
 const TPS_UPDATE_INTERVAL_MS = 2_000;
@@ -175,26 +177,49 @@ export class BenchmarkRunner {
     const fetchTimeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
     const combinedSignal = AbortSignal.any([signal, fetchTimeout]);
 
-    const url = this.provider === "nvidia"
-      ? NIM_CHAT_URL
-      : `${GEMINI_STREAM_URL}/${model.id}:streamGenerateContent?key=${apiKey}`;
+    let url: string;
+    let headers: Record<string, string>;
+    let body: string;
 
-    const body = this.provider === "nvidia"
-      ? JSON.stringify({
-          model: model.id,
-          messages: [
-            {
-              role: "user",
-              content:
-                "Write a function that takes an array of integers and returns the two numbers that sum to a given target. Explain your approach.",
-            },
-          ],
-          max_tokens: 1024,
-          stream: true,
-        })
-      : JSON.stringify({
+    let res: Response;
+    if (this.provider === "nvidia") {
+      url = NIM_CHAT_URL;
+      headers = {
+        Authorization: `Bearer ${apiKey}`,
+        authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      };
+      body = JSON.stringify({
+        model: model.id,
+        messages: [
+          {
+            role: "user",
+            content: "Write a function that takes an array of integers and returns the two numbers that sum to a given target. Explain your approach.",
+          },
+        ],
+        max_tokens: 1024,
+        stream: true,
+      });
+      res = await fetch(url, { method: "POST", headers, body, signal: combinedSignal });
+    } else if (this.provider === "antigravity") {
+      const auth = await getOrRefreshAntigravityAccessToken(apiKey);
+      if (!auth) {
+        throw new Error("Failed to resolve Antigravity access token");
+      }
+      headers = {
+        ...getAntigravityHeaders(auth.accessToken),
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      };
+      const cleanModelId = model.id.replace(/^antigravity-/, "");
+      body = JSON.stringify({
+        project: auth.projectId || "rising-fact-p41fc",
+        model: cleanModelId,
+        request: {
+          model: cleanModelId,
           contents: [
             {
+              role: "user",
               parts: [
                 {
                   text: "Write a function that takes an array of integers and returns the two numbers that sum to a given target. Explain your approach.",
@@ -203,16 +228,41 @@ export class BenchmarkRunner {
             },
           ],
           generationConfig: { maxOutputTokens: 1024 },
-        });
+        },
+        requestType: "agent",
+        userAgent: "antigravity",
+      });
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: this.provider === "nvidia"
-        ? { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` }
-        : { "Content-Type": "application/json" },
-      body,
-      signal: combinedSignal,
-    });
+      const endpoints = [
+        "https://daily-cloudcode-pa.sandbox.googleapis.com",
+        "https://cloudcode-pa.googleapis.com",
+      ];
+
+      let lastRes: Response | null = null;
+      for (const ep of endpoints) {
+        url = `${ep}/v1internal:streamGenerateContent?alt=sse`;
+        lastRes = await fetch(url, { method: "POST", headers, body, signal: combinedSignal });
+        if (lastRes.ok) break;
+      }
+      if (!lastRes) throw new Error("No response from Antigravity endpoints");
+      res = lastRes;
+    } else {
+      url = `${GEMINI_STREAM_URL}/${model.id}:streamGenerateContent?key=${apiKey}`;
+      headers = { "Content-Type": "application/json" };
+      body = JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: "Write a function that takes an array of integers and returns the two numbers that sum to a given target. Explain your approach.",
+              },
+            ],
+          },
+        ],
+        generationConfig: { maxOutputTokens: 1024 },
+      });
+      res = await fetch(url, { method: "POST", headers, body, signal: combinedSignal });
+    }
 
     if (this.generation !== gen) return;
 
@@ -297,6 +347,9 @@ export class BenchmarkRunner {
               let content: string | undefined;
               if (this.provider === "nvidia") {
                 content = parsed?.choices?.[0]?.delta?.content;
+              } else if (this.provider === "antigravity") {
+                const candidate = parsed?.response?.candidates?.[0] ?? parsed?.candidates?.[0];
+                content = candidate?.content?.parts?.[0]?.text;
               } else {
                 content = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
               }

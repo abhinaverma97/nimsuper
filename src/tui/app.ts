@@ -19,6 +19,7 @@ import {
   buildConfirmDelete,
   buildAddNameInput,
   buildAddKeyInput,
+  buildOAuthLoginScreen,
   buildRenameInput,
   buildExportPathInput,
   buildImportPathInput,
@@ -34,6 +35,7 @@ import {
   addFallbackModel,
   cancelBenchmark,
 } from "./actions.js";
+import { openUrlInBrowser } from "../antigravity.js";
 
 export function initApp(): void {
   setNavigate((screen: Screen) => {
@@ -87,6 +89,14 @@ export function initApp(): void {
           case "add-key":
             state.pendingKeyName = "";
             return navigateTo("list");
+          case "oauth-login":
+            if (state.oauthCleanup) {
+              state.oauthCleanup();
+              state.oauthCleanup = null;
+            }
+            state.pendingOAuthUrl = "";
+            state.pendingOAuthState = "";
+            return navigateTo("list");
           case "rename":
             state.renameTargetId = null;
             return navigateTo("key-actions");
@@ -118,8 +128,19 @@ export function initApp(): void {
       }
 
       if (key.ctrl && key.name === "c") {
+        if (state.oauthCleanup) {
+          state.oauthCleanup();
+          state.oauthCleanup = null;
+        }
         if (state.renderer) state.renderer.destroy();
         process.exit(0);
+      }
+
+      if (state.currentScreen === "oauth-login") {
+        if (key.name === "o" && state.pendingOAuthUrl) {
+          openUrlInBrowser(state.pendingOAuthUrl);
+          return;
+        }
       }
 
       if (state.currentScreen === "fallback-chain") {
@@ -152,7 +173,14 @@ export function initApp(): void {
               addFallbackModel(model.id, model.name);
               state.modelSearchQuery = "";
               navigateTo("fallback-chain");
+              return;
             }
+          }
+          const customQuery = state.modelSearchQuery.trim();
+          if (customQuery.length > 0) {
+            addFallbackModel(customQuery, customQuery);
+            state.modelSearchQuery = "";
+            navigateTo("fallback-chain");
           }
           return;
         } else if (key.name === "backspace") {
@@ -225,6 +253,8 @@ function doRenderApp(): void {
         return buildAddNameInput();
       case "add-key":
         return buildAddKeyInput();
+      case "oauth-login":
+        return buildOAuthLoginScreen();
       case "rename":
         return buildRenameInput();
       case "export-path":
@@ -258,7 +288,7 @@ function doRenderApp(): void {
         fg: isKeysTab ? theme.primary : theme.textMuted,
       }),
       Text({
-        content: "API Key Rotation",
+        content: state.activeProvider === "antigravity" ? "Account Rotation" : "API Key Rotation",
         fg: isKeysTab ? theme.primary : theme.textMuted,
       }),
       Text({ content: " | ", fg: theme.textMuted }),
@@ -267,13 +297,19 @@ function doRenderApp(): void {
         fg: !isKeysTab ? theme.primary : theme.textMuted,
       }),
       Text({
-        content: "Model Fallback Chain",
+        content: state.activeProvider === "antigravity" ? "Models" : "Model Fallback Chain",
         fg: !isKeysTab ? theme.primary : theme.textMuted,
       }),
     );
   }
 
-  const providerName = state.activeProvider === "nvidia" ? "NVIDIA NIM" : "Google Gemini";
+  const providerName =
+    state.activeProvider === "nvidia"
+      ? "NVIDIA NIM"
+      : state.activeProvider === "google"
+      ? "Google Gemini"
+      : "Antigravity";
+
   const title = Box(
     { flexDirection: "row", gap: 2 },
     Text({
@@ -296,7 +332,7 @@ function doRenderApp(): void {
     { flexDirection: "row", gap: 2 },
     Text({
       id: "keys-count",
-      content: `Keys: ${totalKeysCount}`,
+      content: `${state.activeProvider === "antigravity" ? "Accounts" : "Keys"}: ${totalKeysCount}`,
       fg: theme.textMuted,
     }),
     Text({

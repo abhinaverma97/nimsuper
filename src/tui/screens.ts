@@ -18,18 +18,24 @@ import {
   addFallbackModel,
   cancelBenchmark,
   startBenchmark,
+  handleStartOAuthLogin,
 } from "./actions.js";
+import { exchangeAntigravity } from "../antigravity.js";
 
 function keyStatus(entry: { enabled: boolean }): string {
   return !entry.enabled ? "OFF" : "OK";
 }
 
 function getProviderDisplayName(provider: ProviderId): string {
-  return provider === "nvidia" ? "NVIDIA NIM" : "Google Gemini";
+  if (provider === "nvidia") return "NVIDIA NIM";
+  if (provider === "google") return "Google Gemini";
+  return "Antigravity (Google OAuth)";
 }
 
 function getProviderShortName(provider: ProviderId): string {
-  return provider === "nvidia" ? "NVIDIA" : "Gemini";
+  if (provider === "nvidia") return "NVIDIA";
+  if (provider === "google") return "Gemini";
+  return "Antigravity";
 }
 
 // ---------------------------------------------------------------------------
@@ -48,6 +54,11 @@ export function buildProviderTabs(): ScreenContent {
       name: "[2] Google Gemini",
       description: "Manage Google Gemini API keys and fallback models",
       value: "google",
+    },
+    {
+      name: "[3] Antigravity",
+      description: "Manage Google OAuth Antigravity accounts and models",
+      value: "antigravity",
     },
     { name: "Quit", description: "Exit the key manager", value: "quit" },
   ];
@@ -98,16 +109,30 @@ export function buildMainMenu(): ScreenContent {
   const theme = getActiveTheme();
   const override = getThemeOverride();
 
+  const isAntigravity = provider === "antigravity";
+
   const opts: (SelectOption | false)[] = [
     hasKeys && {
-      name: "Manage Keys",
-      description: "Select a key to rename, delete, or toggle",
+      name: "Manage Accounts / Keys",
+      description: "Select an entry to rename, delete, or toggle",
       value: "manage",
     },
+    isAntigravity && {
+      name: "Login with Google (OAuth)",
+      description: "Authenticate via Google OAuth PKCE in browser",
+      value: "oauth-start",
+    },
     {
-      name: "Add Key",
-      description: `Add a new ${getProviderDisplayName(provider)} API key`,
+      name: isAntigravity ? "Add Account Manually (Refresh Token)" : "Add Key",
+      description: isAntigravity
+        ? "Manually add account name and refresh_token"
+        : `Add a new ${getProviderDisplayName(provider)} API key`,
       value: "add",
+    },
+    isAntigravity && {
+      name: "Sync Models to opencode.json",
+      description: "Auto-register all Antigravity models in opencode.json",
+      value: "sync-models",
     },
     hasKeys && {
       name: "Reset Failures",
@@ -148,7 +173,11 @@ export function buildMainMenu(): ScreenContent {
     state.mainMenuIndex,
     (idx, opt) => {
       state.mainMenuIndex = idx;
-      handleMenuSelect(opt.value);
+      if (opt.value === "oauth-start") {
+        handleStartOAuthLogin();
+      } else {
+        handleMenuSelect(opt.value);
+      }
     },
   );
 
@@ -403,7 +432,7 @@ export function buildAddNameInput(): ScreenContent {
   return {
     element: Box(
       { flexDirection: "column", gap: 1 },
-      Text({ content: "Enter a friendly name for this key:", fg: theme.text }),
+      Text({ content: "Enter a friendly name for this key / account:", fg: theme.text }),
       input,
     ),
     helpText: "[Enter] next  [Esc] cancel",
@@ -417,13 +446,18 @@ export function buildAddNameInput(): ScreenContent {
 export function buildAddKeyInput(): ScreenContent {
   const theme = getActiveTheme();
   const provider = state.activeProvider;
-  const placeholder = provider === "nvidia" ? "nvapi-..." : "API key (no prefix required)";
+  const placeholder =
+    provider === "nvidia"
+      ? "nvapi-..."
+      : provider === "antigravity"
+      ? "refresh_token (or refresh_token|project_id)"
+      : "API key (no prefix required)";
   const input = themedInput("add-key-input", placeholder, 55);
 
   events(input).on("enter", (value: string) => {
     const key = value.trim();
     if (!key) {
-      setStatus("API key is required", theme.error);
+      setStatus("API key / Token is required", theme.error);
       callRenderApp();
       return;
     }
@@ -435,7 +469,7 @@ export function buildAddKeyInput(): ScreenContent {
     addKey(state.store, state.pendingKeyName, key, provider);
     safeSaveStore();
     refreshStore();
-    setStatus(`Added key "${state.pendingKeyName}"`, theme.success);
+    setStatus(`Added "${state.pendingKeyName}"`, theme.success);
     state.pendingKeyName = "";
     navigate("list");
   });
@@ -445,10 +479,65 @@ export function buildAddKeyInput(): ScreenContent {
       { flexDirection: "column", gap: 1 },
       Text({ content: `Provider: ${getProviderDisplayName(provider)}`, fg: theme.textMuted }),
       Text({ content: `Name: ${state.pendingKeyName}`, fg: theme.primary }),
-      Text({ content: "Enter the API key:", fg: theme.text }),
+      Text({ content: provider === "antigravity" ? "Enter the refresh token (or token|projectId):" : "Enter the API key:", fg: theme.text }),
       input,
     ),
     helpText: "[Enter] confirm  [Esc] cancel",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// OAuth Login Screen (for Antigravity)
+// ---------------------------------------------------------------------------
+
+export function buildOAuthLoginScreen(): ScreenContent {
+  const theme = getActiveTheme();
+  const url = state.pendingOAuthUrl;
+  const input = themedInput("oauth-code-input", "Paste redirect URL or authorization code here...", 55);
+
+  events(input).on("enter", async (val: string) => {
+    const trimmed = val.trim();
+    if (!trimmed) return;
+    let code = trimmed;
+    let stateParam = state.pendingOAuthState;
+    if (trimmed.startsWith("http")) {
+      try {
+        const u = new URL(trimmed);
+        code = u.searchParams.get("code") || trimmed;
+        stateParam = u.searchParams.get("state") || stateParam;
+      } catch {}
+    }
+    const res = await exchangeAntigravity(code, stateParam);
+    if (res.type === "success") {
+      const name = state.pendingKeyName || res.email || "antigravity-account";
+      addKey(state.store, name, res.refresh, "antigravity");
+      safeSaveStore();
+      refreshStore();
+      setStatus(`Added Antigravity account "${name}"`, theme.success);
+      if (state.oauthCleanup) {
+        state.oauthCleanup();
+        state.oauthCleanup = null;
+      }
+      state.pendingKeyName = "";
+      state.pendingOAuthUrl = "";
+      state.pendingOAuthState = "";
+      navigate("list");
+    } else {
+      setStatus(`OAuth failed: ${res.error}`, theme.error);
+      callRenderApp();
+    }
+  });
+
+  return {
+    element: Box(
+      { flexDirection: "column", gap: 1 },
+      Text({ content: " Google OAuth Authentication", fg: theme.primary }),
+      Text({ content: " Opening browser for Google login automatically...", fg: theme.success }),
+      Text({ content: " Listening for callback on http://localhost:51121/oauth-callback", fg: theme.textMuted }),
+      Text({ content: " If browser did not open, paste authorization code or callback URL:", fg: theme.text }),
+      input,
+    ),
+    helpText: "[Esc] cancel  [Enter] submit code  [o] re-open browser",
   };
 }
 
@@ -632,13 +721,13 @@ export function buildFallbackMenu(): ScreenContent {
 
   const opts: (SelectOption | false)[] = [
     {
-      name: "Edit Fallback Chain",
-      description: `Manage the model fallback order (${chain.length} models)`,
+      name: provider === "antigravity" ? "Select / Configure Models" : "Edit Fallback Chain",
+      description: `Manage models (${chain.length} configured)`,
       value: "edit-chain",
     },
     {
       name: `Rate Limit Threshold: ${state.store.maxRateLimitFailures}`,
-      description: "Number of rate limits before fallback activates",
+      description: "Number of rate limits before account failover activates",
       value: "settings",
     },
   ];
@@ -710,7 +799,7 @@ export function buildFallbackSettings(): ScreenContent {
       Box(
         { flexDirection: "column" },
         Text({ content: " Fallback Settings:", fg: theme.primary }),
-        Text({ content: ` Fallback after ${current} consecutive rate limit${current === 1 ? "" : "s"}`, fg: theme.textMuted }),
+        Text({ content: ` Rotate to next account after ${current} consecutive rate limit${current === 1 ? "" : "s"}`, fg: theme.textMuted }),
       ),
       selector,
     ),
@@ -847,7 +936,7 @@ export function buildFallbackChain(): ScreenContent {
   return {
     element: Box(
       { flexDirection: "column", gap: 0, width: listWidth },
-      Text({ content: ` ${providerName} Fallback Chain (ordered):`, fg: theme.primary }),
+      Text({ content: ` ${providerName} Models:`, fg: theme.primary }),
       ...items,
     ),
     helpText: "[Up/Down] move  [x] remove  [j/k] reorder\n[a] add  [b] benchmark  [c] cancel",
@@ -900,11 +989,11 @@ export function buildModelSelector(): ScreenContent {
     state.modelSelectorScrollOffset[provider] = 0;
   }
 
-  state.modelSelectorIndex[provider] = clampIndex(state.modelSelectorIndex[provider], searchFilteredModels.length);
+  state.modelSelectorIndex[provider] = clampIndex(state.modelSelectorIndex[provider], Math.max(1, searchFilteredModels.length));
 
   const searchDisplay = state.modelSearchQuery.length > 0
     ? Text({ content: `Search: ${state.modelSearchQuery}_`, fg: theme.primary })
-    : Text({ content: "Type to search...", fg: theme.textMuted });
+    : Text({ content: "Type to search or enter custom model ID...", fg: theme.textMuted });
 
   const listWidth = 56;
   const viewportHeight = 12;
@@ -943,17 +1032,32 @@ export function buildModelSelector(): ScreenContent {
   }
 
   if (totalItems === 0) {
-    items.push(
-      Box(
-        {
-          flexDirection: "row",
-          paddingX: 1,
-          backgroundColor: theme.backgroundPanel,
-          width: listWidth,
-        },
-        Text({ content: "  No matching models", fg: theme.textMuted }),
-      ),
-    );
+    const query = state.modelSearchQuery.trim();
+    if (query.length > 0) {
+      items.push(
+        Box(
+          {
+            flexDirection: "row",
+            paddingX: 1,
+            backgroundColor: theme.selectedBg,
+            width: listWidth,
+          },
+          Text({ content: `▶ + Add custom model ID: "${query}"`, fg: theme.selectedText }),
+        ),
+      );
+    } else {
+      items.push(
+        Box(
+          {
+            flexDirection: "row",
+            paddingX: 1,
+            backgroundColor: theme.backgroundPanel,
+            width: listWidth,
+          },
+          Text({ content: "  No matching models (type to add custom ID)", fg: theme.textMuted }),
+        ),
+      );
+    }
   }
 
   return {
@@ -963,6 +1067,6 @@ export function buildModelSelector(): ScreenContent {
       searchDisplay,
       ...items,
     ),
-    helpText: "[Esc] cancel  [Enter] select  [Type] search  [Backspace] clear  [r] refresh",
+    helpText: "[Esc] cancel  [Enter] select  [Type] search  [Backspace] clear  [r] refresh live",
   };
 }
