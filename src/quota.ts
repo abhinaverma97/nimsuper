@@ -55,12 +55,10 @@ export function isAccount5HrLimitExhausted(
     cached.quotas.get(resolveQuotaModelKey(modelId));
   if (!quota) return false;
 
-  // If Google provided an exact resetTime and that time has passed, account is replenished
   if (quota.resetTimeMs && now >= quota.resetTimeMs) {
     return false;
   }
 
-  // If cache TTL expired without resetTime, allow trying again
   if (!quota.resetTimeMs && now - cached.timestamp > QUOTA_CACHE_TTL_MS) {
     return false;
   }
@@ -89,8 +87,14 @@ export async function fetchSingleAccountBatchQuotas(
     };
     const projectId = auth.projectId || "rising-fact-p41fc";
 
-    const [modelsRes, quotaRes] = await Promise.all([
+    const [prodModelsRes, dailyModelsRes, quotaRes] = await Promise.all([
       fetch("https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ project: projectId }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => null),
+      fetch("https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels", {
         method: "POST",
         headers,
         body: JSON.stringify({ project: projectId }),
@@ -110,9 +114,14 @@ export async function fetchSingleAccountBatchQuotas(
 
     const result = new Map<string, AccountModelQuota>();
 
-    let availableModelsData: any = null;
-    if (modelsRes && modelsRes.ok) {
-      availableModelsData = await modelsRes.json().catch(() => null);
+    let availableModels: Record<string, any> = {};
+    if (prodModelsRes && prodModelsRes.ok) {
+      const data: any = await prodModelsRes.json().catch(() => null);
+      if (data?.models) Object.assign(availableModels, data.models);
+    }
+    if (dailyModelsRes && dailyModelsRes.ok) {
+      const data: any = await dailyModelsRes.json().catch(() => null);
+      if (data?.models) Object.assign(availableModels, data.models);
     }
 
     let quotaBucketsData: any = null;
@@ -144,8 +153,8 @@ export async function fetchSingleAccountBatchQuotas(
     for (const mId of allModelIds) {
       const quotaKey = resolveQuotaModelKey(mId);
       const modelEntry =
-        availableModelsData?.models?.[mId] ??
-        availableModelsData?.models?.[quotaKey];
+        availableModels[mId] ??
+        availableModels[quotaKey];
 
       const fiveHourFraction =
         modelEntry?.quotaInfo?.remainingFraction != null
@@ -185,18 +194,21 @@ export async function fetchSingleAccountBatchQuotas(
 
 export async function refreshAllModelQuotas(
   keys: ApiKeyEntry[],
-  modelsMap?: Record<string, any>,
 ): Promise<void> {
   const activeKeys = keys.filter((k) => k.provider === "antigravity" && k.enabled);
   if (activeKeys.length === 0) return;
 
-  const keyBatchResults = await Promise.all(
+  const results = await Promise.allSettled(
     activeKeys.map((k) => fetchSingleAccountBatchQuotas(k.key)),
   );
 
-  const validBatches = keyBatchResults.filter(
-    (b): b is Map<string, AccountModelQuota> => b != null,
-  );
+  const validBatches: Map<string, AccountModelQuota>[] = [];
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value) {
+      validBatches.push(r.value);
+    }
+  }
+
   if (validBatches.length === 0) return;
 
   const activeKeyIds = activeKeys.map((k) => k.id).sort().join(",");
@@ -238,42 +250,7 @@ export async function refreshAllModelQuotas(
     quotaCache.set(`${quotaKey}:${activeKeyIds}`, { timestamp: Date.now(), data });
     quotaCache.set(`${mId}:${activeKeyIds}`, { timestamp: Date.now(), data });
     quotaCache.set(`antigravity-${mId}:${activeKeyIds}`, { timestamp: Date.now(), data });
-
-    if (modelsMap) {
-      const model = modelsMap[`antigravity-${mId}`] ?? modelsMap[mId];
-      if (model) {
-        const cleanBase = (model.name ?? mId).replace(/\s+5h:.*$/, "");
-        model.name = `${cleanBase} 5h: ${data.fiveHourPercent}% W: ${data.weeklyPercent}%`;
-      }
-    }
   }
-
-  // Persist updated quota strings to opencode.jsonc so OpenCode displays live percentages
-  try {
-    const configPath = getOpencodeConfigPath();
-    if (existsSync(configPath)) {
-      const raw = readFileSync(configPath, "utf-8");
-      const config = JSON.parse(raw);
-      if (config.provider?.google?.models) {
-        let changed = false;
-        for (const [id, model] of Object.entries(config.provider.google.models as Record<string, any>)) {
-          const clean = id.replace(/^antigravity-/, "");
-          const cached = quotaCache.get(`${clean}:${activeKeyIds}`) ?? quotaCache.get(`${id}:${activeKeyIds}`);
-          if (cached && model) {
-            const cleanBase = (model.name ?? id).replace(/\s+5h:.*$/, "");
-            const newName = `${cleanBase} 5h: ${cached.data.fiveHourPercent}% W: ${cached.data.weeklyPercent}%`;
-            if (model.name !== newName) {
-              model.name = newName;
-              changed = true;
-            }
-          }
-        }
-        if (changed) {
-          writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
-        }
-      }
-    }
-  } catch {}
 }
 
 export async function fetchSingleAccountQuota(

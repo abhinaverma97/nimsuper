@@ -26,7 +26,6 @@ import {
   getOrRefreshAntigravityAccessToken,
   getAntigravityHeaders,
 } from "./antigravity.js";
-import { getNormalizedQuota, refreshAllModelQuotas } from "./quota.js";
 import { BASE_ANTIGRAVITY_MODELS, syncOpencodeModels } from "./opencode-sync.js";
 
 const PROVIDERS: ProviderId[] = ["nvidia", "google", "antigravity"];
@@ -114,6 +113,7 @@ export const SuperocPlugin: Plugin = async (input: PluginInput, options?: Record
   const store = loadStore(config) ?? getDefaultStore();
   if (!store.fallbackChains) store.fallbackChains = { nvidia: [], google: [], antigravity: [] };
 
+  let activeProviderContextModels: Record<string, any> | undefined;
   const sessions = new Map<string, SessionState>();
 
   const reloadFromDisk = () => {
@@ -171,7 +171,7 @@ export const SuperocPlugin: Plugin = async (input: PluginInput, options?: Record
 
   const showToast = async (variant: "success" | "info" | "warning" | "error", message: string) => {
     try {
-      await client.tui?.showToast?.({ body: { title: "Model Fallback", message, variant } });
+      await client.tui?.showToast?.({ body: { title: "Antigravity Quota", message, variant } });
     } catch (err) {
       console.debug("[superoc] showToast failed:", err);
     }
@@ -531,8 +531,10 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
       provider: "google",
       loader: async (_getAuth, providerContext) => {
         if (providerContext) {
+          activeProviderContextModels = providerContext.models;
           if (!providerContext.models) {
             providerContext.models = {};
+            activeProviderContextModels = providerContext.models;
           }
           // Dynamically inject Antigravity models immediately (0ms)
           for (const [id, def] of Object.entries(BASE_ANTIGRAVITY_MODELS)) {
@@ -540,13 +542,6 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
               providerContext.models[id] = JSON.parse(JSON.stringify(def));
             }
           }
-          // Fetch and enrich live quotas in background without blocking startup
-          setTimeout(async () => {
-            try {
-              reloadFromDisk();
-              await refreshAllModelQuotas(store.keys, providerContext.models);
-            } catch {}
-          }, 100);
         }
 
         return {
@@ -574,6 +569,7 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
 
               if (isAntigravityModel || activeAntigravityKeys.length > 0) {
                 let attempts = 0;
+                let lastResponse: Response | null = null;
                 const maxAttempts = Math.max(1, activeAntigravityKeys.length);
                 while (attempts < maxAttempts) {
                   attempts++;
@@ -637,17 +633,11 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
                     }
                   }
 
-                  if (gotRes && gotRes.ok) {
-                    // Update in-memory quota labels in background after successful response
-                    if (providerContext?.models) {
-                      setTimeout(async () => {
-                        try {
-                          reloadFromDisk();
-                          await refreshAllModelQuotas(store.keys, providerContext.models);
-                        } catch {}
-                      }, 1500);
-                    }
+                  if (gotRes) {
+                    lastResponse = gotRes;
+                  }
 
+                  if (gotRes && gotRes.ok) {
                     if (isStreaming && gotRes.body) {
                       const transformedStream = gotRes.body.pipeThrough(createSseUnwrapTransform());
                       return new Response(transformedStream, {
@@ -666,6 +656,20 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
                   }
 
                   if (gotRes) return gotRes;
+                }
+
+                if (isAntigravityModel) {
+                  if (lastResponse) return lastResponse;
+                  return new Response(
+                    JSON.stringify({
+                      error: {
+                        code: 429,
+                        message: "All Antigravity accounts are currently rate limited or exhausted.",
+                        status: "RESOURCE_EXHAUSTED",
+                      },
+                    }),
+                    { status: 429, headers: { "Content-Type": "application/json" } },
+                  );
                 }
               }
             }
@@ -864,13 +868,14 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
 
       if (event.type === "session.idle") {
         const sessionID = (event.properties as Record<string, unknown>)?.sessionID as string;
-        if (!sessionID) return;
-        const state = sessions.get(sessionID);
-        if (!state) return;
-        if (state.inRetry) return;
-        state.pendingRetryIndex = undefined;
-        state.lastFailedModelId = undefined;
-        cleanupSession(sessionID);
+        if (sessionID) {
+          const state = sessions.get(sessionID);
+          if (state && !state.inRetry) {
+            state.pendingRetryIndex = undefined;
+            state.lastFailedModelId = undefined;
+            cleanupSession(sessionID);
+          }
+        }
       }
 
       if (event.type === "session.deleted") {

@@ -63,17 +63,16 @@ export function detectProviderForRequest(input: unknown): ProviderId | null {
   );
   const modelId = normalize(model?.id as unknown);
 
-  // 1. Check API endpoint URL first (most definitive)
+  // 1. Check model ID FIRST (most specific: if model is antigravity-*, it is Antigravity)
+  if (looksLikeAntigravity(modelId)) return "antigravity";
+  if (looksLikeNvidia(modelId)) return "nvidia";
+
+  // 2. Check API endpoint URL
   if (api) {
     if (/cloudcode-pa\.googleapis\.com|sandbox\.googleapis\.com|antigravity/i.test(api)) return "antigravity";
     if (/integrate\.api\.nvidia\.com/i.test(api)) return "nvidia";
     if (/generativelanguage\.googleapis\.com|googleapis\.com/i.test(api)) return "google";
   }
-
-  // 2. Check model ID (highly specific for model fallback requests)
-  if (looksLikeAntigravity(modelId)) return "antigravity";
-  if (looksLikeNvidia(modelId)) return "nvidia";
-  if (looksLikeGoogle(modelId)) return "google";
 
   // 3. Check model provider ID
   if (looksLikeAntigravity(modelProviderId)) return "antigravity";

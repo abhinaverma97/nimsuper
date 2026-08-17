@@ -27,7 +27,6 @@ import {
   openUrlInBrowser,
 } from "../antigravity.js";
 import { syncOpencodeModels } from "../opencode-sync.js";
-import { refreshAllModelQuotas } from "../quota.js";
 
 export function handleKeyAction(action: string): void {
   if (!state.selectedKeyId) return;
