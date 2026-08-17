@@ -1,16 +1,17 @@
 {
-  "name": "nimsuper",
-  "version": "0.2.4",
-  "description": "Multi-provider API key rotator & fallback plugin for OpenCode — NVIDIA NIM, Google Gemini & Google Cloud Code Antigravity with live quota tracking",
+  "name": "superoc",
+  "version": "0.1.0",
+  "description": "Multi-provider API key & OAuth account rotator plugin for OpenCode — NVIDIA NIM, Google Gemini & Google Cloud Code Antigravity",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
   "bin": {
-    "nimsuper": "bin/nimsuper.js"
+    "superoc": "bin/superoc.js",
+    "nimsuper": "bin/superoc.js"
   },
   "scripts": {
     "build": "tsc",
-    "tui": "bun run bin/nimsuper.ts",
+    "tui": "bun run bin/superoc.ts",
     "prepare": "npm run build",
     "postinstall": "node scripts/postinstall.js",
     "uninstall": "node scripts/uninstall.js",
@@ -19,20 +20,24 @@
   "keywords": [
     "opencode",
     "plugin",
+    "superoc",
     "nvidia",
     "nim",
-    "nimsuper",
-    "api-key",
-    "rotation"
+    "google",
+    "gemini",
+    "antigravity",
+    "claude",
+    "rotation",
+    "api-key"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/abhinaverma97/nimsuper.git"
+    "url": "git+https://github.com/abhinaverma97/superoc.git"
   },
   "bugs": {
-    "url": "https://github.com/abhinaverma97/nimsuper/issues"
+    "url": "https://github.com/abhinaverma97/superoc/issues"
   },
-  "homepage": "https://github.com/abhinaverma97/nimsuper#readme",
+  "homepage": "https://github.com/abhinaverma97/superoc#readme",
   "author": "abhinaverma97",
   "license": "MIT",
   "files": [

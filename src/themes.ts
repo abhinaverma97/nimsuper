@@ -457,7 +457,13 @@ export function getResolvedTheme(): RotatorTheme {
   return themes["opencode"]!;
 }
 
-const THEME_OVERRIDE_PATH = join(CONFIG_DIR, "nimsuper-theme.json");
+const SUPEROC_THEME_PATH = join(CONFIG_DIR, "superoc-theme.json");
+const LEGACY_THEME_PATH = join(CONFIG_DIR, "nimsuper-theme.json");
+const THEME_OVERRIDE_PATH = existsSync(SUPEROC_THEME_PATH)
+  ? SUPEROC_THEME_PATH
+  : existsSync(LEGACY_THEME_PATH)
+    ? LEGACY_THEME_PATH
+    : SUPEROC_THEME_PATH;
 
 export function getThemeOverride(): string | null {
   try {
@@ -472,17 +478,17 @@ export function getThemeOverride(): string | null {
 export function saveThemeOverride(themeId: string): void {
   try {
     const data = { theme: themeId };
-    const dir = dirname(THEME_OVERRIDE_PATH);
+    const dir = dirname(SUPEROC_THEME_PATH);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
-    const tmpPath = THEME_OVERRIDE_PATH + ".tmp." + crypto.randomUUID();
+    const tmpPath = SUPEROC_THEME_PATH + ".tmp." + crypto.randomUUID();
     writeFileSync(tmpPath, JSON.stringify(data, null, 2) + "\n", {
       mode: 0o600,
     });
-    renameSync(tmpPath, THEME_OVERRIDE_PATH);
+    renameSync(tmpPath, SUPEROC_THEME_PATH);
   } catch (err) {
-    console.warn("[nimsuper] Could not save theme preference:", err);
+    console.warn("[superoc] Could not save theme preference:", err);
   }
 }
 

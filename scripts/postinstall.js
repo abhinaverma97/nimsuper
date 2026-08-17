@@ -15,7 +15,7 @@ async function install() {
   console.log(
     "\n+=============================================================+",
   );
-  console.log("|  nimsuper - Installer                                      |");
+  console.log("|  superoc - Installer                                        |");
   console.log(
     "+=============================================================+\n",
   );
@@ -32,38 +32,43 @@ async function install() {
       const config = JSON.parse(raw);
 
       config.plugin = config.plugin || [];
+      // Clean up legacy "nimsuper" entry if present
+      config.plugin = config.plugin.filter(function (p) {
+        if (typeof p === "string") return p !== "nimsuper";
+        if (Array.isArray(p)) return p[0] !== "nimsuper";
+        return true;
+      });
+
       const hasPlugin = config.plugin.some(function (p) {
-        if (typeof p === "string") return p === "nimsuper";
-        if (Array.isArray(p)) return p[0] === "nimsuper";
+        if (typeof p === "string") return p === "superoc";
+        if (Array.isArray(p)) return p[0] === "superoc";
         return false;
       });
 
       if (!hasPlugin) {
-        config.plugin.push("nimsuper");
+        config.plugin.push("superoc");
         await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", {
           mode: 0o600,
         });
-        console.log("Added nimsuper to opencode.json plugin list");
+        console.log("Added superoc to OpenCode plugin list");
       } else {
-        console.log("Plugin already in opencode.json - skipping");
+        console.log("Plugin already in OpenCode config - skipping");
       }
     } catch (err) {
-      console.warn("Could not update opencode.json:", err);
+      console.warn("Could not update OpenCode config:", err);
     }
   } else {
-    const config = { plugin: ["nimsuper"] };
+    const config = { plugin: ["superoc"] };
     await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", {
       mode: 0o600,
     });
-    console.log("Created opencode.json with plugin entry");
+    console.log("Created OpenCode config with superoc plugin entry");
   }
 
   console.log("\nNext steps:");
-  console.log("  1. Run: bun nimsuper  (to manage your API keys)");
-  console.log("  2. Add at least one NVIDIA NIM API key via the TUI");
-  console.log(
-    "  3. Restart opencode - the plugin will auto-rotate your keys\n",
-  );
+  console.log("  1. Run: superoc  (to manage your API keys & accounts)");
+  console.log("  2. Connect your providers via the TUI");
+  console.log("  3. Start OpenCode - superoc will auto-rotate your keys & accounts\n");
 }
 
 await install().catch(function (err) {

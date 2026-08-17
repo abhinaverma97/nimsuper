@@ -1,4 +1,4 @@
-# nimsuper
+# superoc
 
 Multi-provider API key rotator and model fallback plugin for [OpenCode](https://opencode.ai).
 
@@ -15,24 +15,23 @@ Fork of [opencode-nim-rotator](https://github.com/ChakornK/opencode-nim-rotator)
 ## Install
 
 ```bash
-npm install -g nimsuper
+npm install -g superoc
 ```
 
-*(The installer automatically adds `nimsuper` to your OpenCode config on install)*
+*(The installer automatically adds `superoc` to your OpenCode config on install)*
 
 ## Usage
 
 ```bash
-nimsuper
+superoc
 ```
 
 ### Connect Providers
 
-- **Antigravity**: Launch `nimsuper` -> `[3] Antigravity` -> `[1] Add Account (OAuth)` to login via browser.
-- **NVIDIA**: Launch `nimsuper` -> `[1] NVIDIA` -> `[1] Add Key` (or export `NVIDIA_API_KEY`).
-- **Google**: Launch `nimsuper` -> `[2] Google` -> `[1] Add Key` (or export `GOOGLE_API_KEY`).
+- **Antigravity**: Launch `superoc` -> `[3] Antigravity` -> `[1] Add Account (OAuth)` to login via browser.
+- **NVIDIA**: Launch `superoc` -> `[1] NVIDIA` -> `[1] Add Key` (or export `NVIDIA_API_KEY`).
+- **Google**: Launch `superoc` -> `[2] Google` -> `[1] Add Key` (or export `GOOGLE_API_KEY`).
 
 ## License
 
 MIT
-

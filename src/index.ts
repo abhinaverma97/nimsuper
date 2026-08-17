@@ -101,7 +101,7 @@ function findChainIndex(chain: FallbackModel[], model: { providerID: string; mod
   return chain.findIndex((entry) => entry.id === model.modelID);
 }
 
-export const NimSuperPlugin: Plugin = async (input: PluginInput, options?: Record<string, unknown>) => {
+export const SuperocPlugin: Plugin = async (input: PluginInput, options?: Record<string, unknown>) => {
   const client = input.client;
   const config: KeyStoreConfig = {
     storePath: options?.storePath as string | undefined,
@@ -883,4 +883,5 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
   return hooks;
 };
 
-export default NimSuperPlugin;
+export const NimSuperPlugin = SuperocPlugin;
+export default SuperocPlugin;

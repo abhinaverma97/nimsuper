@@ -19,12 +19,24 @@ import type {
   ProviderId,
 } from "./types.js";
 
-const DEFAULT_STORE_PATH = join(
+const SUPEROC_STORE_PATH = join(
+  homedir(),
+  ".config",
+  "opencode",
+  "superoc-keys.json",
+);
+const LEGACY_STORE_PATH = join(
   homedir(),
   ".config",
   "opencode",
   "nimsuper-keys.json",
 );
+const DEFAULT_STORE_PATH = existsSync(SUPEROC_STORE_PATH)
+  ? SUPEROC_STORE_PATH
+  : existsSync(LEGACY_STORE_PATH)
+    ? LEGACY_STORE_PATH
+    : SUPEROC_STORE_PATH;
+
 export const MODEL_BLACKLIST_BASE_DURATION_MS = 30_000;
 export const MODEL_BLACKLIST_MAX_DURATION_MS = 60 * 60 * 1000;
 const MODEL_BLACKLIST_ESCALATION = 1.5;
@@ -52,6 +64,7 @@ export function getDefaultStore(): KeyStore {
 export function resolveStorePath(config?: KeyStoreConfig): string {
   return (
     config?.storePath ??
+    process.env.SUPEROC_STORE_PATH ??
     process.env.NIMSUPER_STORE_PATH ??
     DEFAULT_STORE_PATH
   );
