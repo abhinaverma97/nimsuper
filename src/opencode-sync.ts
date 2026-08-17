@@ -17,9 +17,6 @@ export function getOpencodeConfigPath(): string {
   return jsonPath;
 }
 
-import { loadStore } from "./storage.js";
-import { getNormalizedQuota } from "./quota.js";
-
 export const BASE_ANTIGRAVITY_MODELS: Record<string, any> = {
   "antigravity-gemini-3.7-flash": {
     name: "Gemini 3.7 Flash (Antigravity)",
@@ -88,12 +85,12 @@ export const BASE_ANTIGRAVITY_MODELS: Record<string, any> = {
   },
 };
 
-export async function syncOpencodeModels(customModels?: FallbackModel[]): Promise<{
+export function syncOpencodeModels(customModels?: FallbackModel[]): {
   success: boolean;
   configPath: string;
   count: number;
   error?: string;
-}> {
+} {
   const configPath = getOpencodeConfigPath();
   try {
     let config: Record<string, any> = {
@@ -112,7 +109,6 @@ export async function syncOpencodeModels(customModels?: FallbackModel[]): Promis
     if (!Array.isArray(config.plugin)) config.plugin = [];
     if (!config.provider || typeof config.provider !== "object") config.provider = {};
     
-    // Remove custom provider.antigravity if present since OpenCode doesn't have an internal driver for it
     if (config.provider.antigravity) {
       delete config.provider.antigravity;
     }
@@ -135,17 +131,6 @@ export async function syncOpencodeModels(customModels?: FallbackModel[]): Promis
             modalities: DEFAULT_MODALITIES,
           };
         }
-      }
-    }
-
-    const store = loadStore();
-    if (store) {
-      for (const [id, model] of Object.entries(baseModels)) {
-        try {
-          const quota = await getNormalizedQuota(store.keys, id);
-          const cleanName = (model.name as string).replace(/\s+5h:.*$/, "");
-          model.name = `${cleanName} 5h: ${quota.fiveHourPercent}% W: ${quota.weeklyPercent}%`;
-        } catch {}
       }
     }
 

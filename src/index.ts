@@ -169,8 +169,6 @@ export const SuperocPlugin: Plugin = async (input: PluginInput, options?: Record
     }
   }
 
-  syncOpencodeModels().catch(() => {});
-
   const showToast = async (variant: "success" | "info" | "warning" | "error", message: string) => {
     try {
       await client.tui?.showToast?.({ body: { title: "Model Fallback", message, variant } });
