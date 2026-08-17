@@ -1,6 +1,6 @@
 {
   "name": "nimsuper",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Multi-provider API key rotator & fallback plugin for OpenCode — NVIDIA NIM, Google Gemini & Google Cloud Code Antigravity with live quota tracking",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

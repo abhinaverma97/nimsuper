@@ -38,15 +38,7 @@ nimsuper
 - **NVIDIA**: Launch `nimsuper` -> `[1] NVIDIA` -> `[1] Add Key` (or export `NVIDIA_API_KEY`).
 - **Google**: Launch `nimsuper` -> `[2] Google` -> `[1] Add Key` (or export `GOOGLE_API_KEY`).
 
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `NIMSUPER_STORE_PATH` | `~/.config/opencode/nimsuper-keys.json` | Key and config storage path |
-| `NIMSUPER_MAX_FAILURES` | `5` | Failures before triggering model fallback |
-| `NVIDIA_API_KEY` | *(optional)* | Default NVIDIA API key |
-| `GOOGLE_API_KEY` | *(optional)* | Default Google Gemini API key |
-
 ## License
 
 MIT
+
