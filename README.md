@@ -1,98 +1,52 @@
 # nimsuper
 
-[![npm version](https://img.shields.io/npm/v/nimsuper.svg)](https://www.npmjs.com/package/nimsuper)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+Multi-provider API key rotator and model fallback plugin for [OpenCode](https://opencode.ai).
 
-**Multi-provider API key rotator & fallback plugin for [OpenCode](https://opencode.ai)** — supporting **NVIDIA NIM**, **Google Gemini**, and **Google Cloud Code Antigravity (OAuth)** with real-time quota tracking, model fallbacks, and an interactive TUI.
+Supports **NVIDIA NIM**, **Google Gemini**, and **Google Cloud Code Antigravity (OAuth)**.
 
----
+## Features
 
-## ✨ Features
+- **NVIDIA NIM**: API key rotation with model fallback chains and rate-limit recovery.
+- **Google Gemini**: Google AI Studio API key rotation with auto 429 failover.
+- **Antigravity (OAuth)**: Google OAuth account rotation for Claude Sonnet 4.6, Claude Opus 4.6 (Thinking), Gemini 3.7 Flash, and GPT-OSS 120B.
+- **Live Quota Tracking**: Normalized 5-hour and weekly quotas displayed directly on model labels (`5h: 98.9% W: 100%`).
+- **TUI Manager**: Terminal UI for managing keys, accounts, fallback chains, and live TTFB/TPS benchmarks.
 
-- 🔄 **Multi-Provider Key Rotation**:
-  - **NVIDIA NIM**: Rotate multiple NVIDIA API keys seamlessly with automatic rate-limit (429) failover and model fallback chains.
-  - **Google Gemini**: Rotate standard Google AI Studio API keys.
-  - **Google Cloud Code Antigravity (OAuth)**: Full Google OAuth PKCE integration. Access Claude Sonnet 4.6, Claude Opus 4.6 (Thinking), Gemini 3.7 Flash, and GPT-OSS 120B with automatic account rotation on 429s.
-- 📊 **Real-Time Quota Tracking & Normalization**:
-  - Displays persistent 5-hour rolling limits and weekly limits in model labels:  
-    `Build · Gemini 3.6 Flash High (Antigravity) 5h: 98.9% W: 100% Google`
-  - Automatically averages and normalizes quotas across all connected Google accounts (e.g. 50% + 100% = 75%).
-  - Real-time background refresh on chat responses with zero intrusive toasts.
-- ⚡ **Interactive Terminal UI (TUI)**:
-  - Run `nimsuper` or `bun run tui` to manage accounts, keys, fallback chains, and rotation strategies.
-  - Built-in **Live Benchmarks** (measuring TTFB, Tokens/sec, and token count).
-  - Customizable color themes (Tokyo Night, Catppuccin, Nord, Cyberpunk, and more).
-- 🛡️ **Reliability & Bug Fixes**:
-  - **Provider Isolation**: Injects headers strictly to matching providers — prevents cross-provider authentication conflicts.
-  - **Conflict-Free Proxy**: Eliminates `"API key for authentication is used with other authentication credentials"` errors via OpenCode's native `auth.loader`.
-  - **Live SSE Stream Transformer**: Unwraps nested Google Cloud Code SSE packets into standard Gemini streams in real-time.
-  - **Dual-Endpoint Fallback**: Automatic failover between Google Sandbox (`daily-cloudcode-pa.sandbox.googleapis.com`) and Production endpoints.
-  - **Smart Rate-Limit & Timeout Recovery**: String status code parsing (`"429"` / `"RESOURCE_EXHAUSTED"`) and abort timeout retries.
-
----
-
-## 📦 Installation
+## Install
 
 ```bash
 npm install -g nimsuper
 ```
 
-Add `nimsuper` to your OpenCode configuration (`~/.config/opencode/opencode.jsonc` or `opencode.json`):
+Add to `~/.config/opencode/opencode.json` (or `opencode.jsonc`):
 
-```jsonc
+```json
 {
   "plugin": ["nimsuper"]
 }
 ```
 
----
+## Usage
 
-## 🚀 Quick Start
-
-### 1. Launch the TUI Manager
 ```bash
 nimsuper
 ```
 
-### 2. Connect Providers
-- **Antigravity (Google Cloud Code)**:
-  1. Open `nimsuper` TUI $\to$ Select `[3] Antigravity`.
-  2. Select `[1] Add Account (OAuth)` $\to$ Authorize in your browser.
-  3. Models (`antigravity-claude-sonnet-4-6`, `antigravity-gemini-3.7-flash`, etc.) are automatically synced to your OpenCode config!
-- **NVIDIA NIM**:
-  - Select `[1] NVIDIA` in the TUI $\to$ `[1] Add Key` (or set `NVIDIA_API_KEY` in your environment).
-- **Google Gemini API**:
-  - Select `[2] Google` in the TUI $\to$ `[1] Add Key` (or set `GOOGLE_API_KEY`).
+### Connect Providers
 
----
+- **Antigravity**: Launch `nimsuper` -> `[3] Antigravity` -> `[1] Add Account (OAuth)` to login via browser.
+- **NVIDIA**: Launch `nimsuper` -> `[1] NVIDIA` -> `[1] Add Key` (or export `NVIDIA_API_KEY`).
+- **Google**: Launch `nimsuper` -> `[2] Google` -> `[1] Add Key` (or export `GOOGLE_API_KEY`).
 
-## ⚙️ Configuration & Environment
+## Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `NIMSUPER_STORE_PATH` | `~/.config/opencode/nimsuper-keys.json` | Path to store keys and fallback chains |
-| `NIMSUPER_MAX_FAILURES` | `5` | Maximum consecutive failures before triggering model fallback |
-| `NVIDIA_API_KEY` | *(optional)* | Default NVIDIA API key fallback |
-| `GOOGLE_API_KEY` | *(optional)* | Default Google Gemini API key fallback |
+| `NIMSUPER_STORE_PATH` | `~/.config/opencode/nimsuper-keys.json` | Key and config storage path |
+| `NIMSUPER_MAX_FAILURES` | `5` | Failures before triggering model fallback |
+| `NVIDIA_API_KEY` | *(optional)* | Default NVIDIA API key |
+| `GOOGLE_API_KEY` | *(optional)* | Default Google Gemini API key |
 
----
+## License
 
-## 🔄 Rotation Strategies
-
-You can toggle rotation strategies in the TUI or store configuration:
-- **`round-robin`**: Evenly distributes requests across all active keys.
-- **`least-failures`**: Prioritizes keys with the lowest historical failure counts.
-
----
-
-## 🗑️ Uninstall
-
-```bash
-npm uninstall -g nimsuper
-```
-
----
-
-## 📄 License
-
-MIT © [abhinaverma97](https://github.com/abhinaverma97)
+MIT
