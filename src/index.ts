@@ -27,7 +27,7 @@ import {
   getAntigravityHeaders,
 } from "./antigravity.js";
 import { getNormalizedQuota } from "./quota.js";
-import { BASE_ANTIGRAVITY_MODELS } from "./opencode-sync.js";
+import { BASE_ANTIGRAVITY_MODELS, syncOpencodeModels } from "./opencode-sync.js";
 
 const PROVIDERS: ProviderId[] = ["nvidia", "google", "antigravity"];
 const NIM_BASE_URL = "https://integrate.api.nvidia.com";
@@ -168,6 +168,8 @@ export const SuperocPlugin: Plugin = async (input: PluginInput, options?: Record
       }
     }
   }
+
+  syncOpencodeModels().catch(() => {});
 
   const showToast = async (variant: "success" | "info" | "warning" | "error", message: string) => {
     try {
