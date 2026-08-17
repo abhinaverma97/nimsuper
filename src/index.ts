@@ -26,7 +26,7 @@ import {
   getOrRefreshAntigravityAccessToken,
   getAntigravityHeaders,
 } from "./antigravity.js";
-import { getNormalizedQuota } from "./quota.js";
+import { getNormalizedQuota, refreshAllModelQuotas } from "./quota.js";
 import { BASE_ANTIGRAVITY_MODELS, syncOpencodeModels } from "./opencode-sync.js";
 
 const PROVIDERS: ProviderId[] = ["nvidia", "google", "antigravity"];
@@ -536,22 +536,19 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
           if (!providerContext.models) {
             providerContext.models = {};
           }
-          // Dynamically inject Antigravity models so OpenCode knows about them even with empty config
+          // Dynamically inject Antigravity models immediately (0ms)
           for (const [id, def] of Object.entries(BASE_ANTIGRAVITY_MODELS)) {
             if (!providerContext.models[id]) {
               providerContext.models[id] = JSON.parse(JSON.stringify(def));
             }
           }
-          try {
-            reloadFromDisk();
-            for (const [id, model] of Object.entries(providerContext.models)) {
-              if (id.startsWith("antigravity-") && model) {
-                const quota = await getNormalizedQuota(store.keys, id);
-                const cleanBase = (model.name ?? id).replace(/\s+5h:.*$/, "");
-                model.name = `${cleanBase} 5h: ${quota.fiveHourPercent}% W: ${quota.weeklyPercent}%`;
-              }
-            }
-          } catch {}
+          // Fetch and enrich live quotas in background without blocking startup
+          setTimeout(async () => {
+            try {
+              reloadFromDisk();
+              await refreshAllModelQuotas(store.keys, providerContext.models);
+            } catch {}
+          }, 100);
         }
 
         return {
@@ -648,16 +645,9 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
                       setTimeout(async () => {
                         try {
                           reloadFromDisk();
-                          const freshQuota = await getNormalizedQuota(store.keys, rawModel, true);
-                          const targetModel =
-                            providerContext.models[rawModel] ??
-                            providerContext.models[`antigravity-${rawModel}`];
-                          if (targetModel) {
-                            const cleanBase = (targetModel.name ?? rawModel).replace(/\s+5h:.*$/, "");
-                            targetModel.name = `${cleanBase} 5h: ${freshQuota.fiveHourPercent}% W: ${freshQuota.weeklyPercent}%`;
-                          }
+                          await refreshAllModelQuotas(store.keys, providerContext.models);
                         } catch {}
-                      }, 2000);
+                      }, 1500);
                     }
 
                     if (isStreaming && gotRes.body) {
