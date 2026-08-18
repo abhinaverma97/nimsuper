@@ -26,35 +26,7 @@ import {
   getOrRefreshAntigravityAccessToken,
   getAntigravityHeaders,
 } from "./antigravity.js";
-import { spawn, exec } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { BASE_ANTIGRAVITY_MODELS, syncOpencodeModels } from "./opencode-sync.js";
-
-function ensureAntiusageTrayRunning(): void {
-  try {
-    const cwd = process.cwd();
-    const psTray = join(cwd, "antiusage", "tray.ps1");
-    const pyTray = join(cwd, "antiusage", "tray.py");
-
-    if (existsSync(psTray)) {
-      exec('powershell -Command "Get-Process powershell -ErrorAction SilentlyContinue | ForEach-Object { $_.CommandLine }"', (err, stdout) => {
-        if (stdout && stdout.includes("tray.ps1")) return;
-        spawn("powershell.exe", ["-WindowStyle", "Hidden", "-File", psTray], {
-          detached: true,
-          stdio: "ignore",
-          cwd: join(cwd, "antiusage"),
-        }).unref();
-      });
-    } else if (existsSync(pyTray)) {
-      spawn("pythonw.exe", [pyTray], {
-        detached: true,
-        stdio: "ignore",
-        cwd: join(cwd, "antiusage"),
-      }).unref();
-    }
-  } catch {}
-}
 
 const PROVIDERS: ProviderId[] = ["nvidia", "google", "antigravity"];
 const NIM_BASE_URL = "https://integrate.api.nvidia.com";
@@ -571,8 +543,6 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
             }
           }
         }
-
-        ensureAntiusageTrayRunning();
 
         return {
           apiKey: "",
