@@ -272,6 +272,21 @@ export function getNextKey(
   const active = getActiveKeys(store, provider, modelId);
   if (active.length === 0) return null;
 
+  // Fill-First ONLY for Antigravity: stick to current account until exhausted or rate limited
+  if (provider === "antigravity") {
+    const currentActive = active.find((k) => k.id === store.lastUsedKeyId);
+    if (currentActive) {
+      const realIdx = store.keys.indexOf(currentActive);
+      currentActive.lastUsedAt = Date.now();
+      return { key: currentActive, index: realIdx };
+    }
+    const firstActive = active[0];
+    const realIdx = store.keys.indexOf(firstActive);
+    store.lastUsedKeyId = firstActive.id;
+    firstActive.lastUsedAt = Date.now();
+    return { key: firstActive, index: realIdx };
+  }
+
   const strategy = config?.rotationStrategy ?? store.rotationStrategy ?? "round-robin";
 
   if (strategy === "least-failures") {

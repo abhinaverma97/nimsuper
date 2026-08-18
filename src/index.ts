@@ -579,6 +579,7 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
                   const authRes = await getOrRefreshAntigravityAccessToken(next.key.key);
                   if (!authRes) {
                     recordRateLimit(store, next.key.id);
+                    recordModelRateLimit(store, next.key.id, rawModel);
                     safeSaveStore();
                     continue;
                   }
@@ -651,6 +652,7 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
 
                   if (gotRes && gotRes.status === 429) {
                     recordRateLimit(store, next.key.id);
+                    recordModelRateLimit(store, next.key.id, rawModel);
                     safeSaveStore();
                     continue;
                   }
