@@ -5,4 +5,4 @@ dist/
 .DS_Store
 scratch/
 *.log
-
+antiusage/
