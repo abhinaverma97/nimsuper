@@ -578,9 +578,6 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
 
                   const authRes = await getOrRefreshAntigravityAccessToken(next.key.key);
                   if (!authRes) {
-                    recordRateLimit(store, next.key.id);
-                    recordModelRateLimit(store, next.key.id, rawModel);
-                    safeSaveStore();
                     continue;
                   }
 
@@ -613,24 +610,28 @@ function createSseUnwrapTransform(): TransformStream<Uint8Array, Uint8Array> {
                   if (isStreaming) headers.set("Accept", "text/event-stream");
 
                   const endpoints = [
-                    "https://daily-cloudcode-pa.sandbox.googleapis.com",
                     "https://cloudcode-pa.googleapis.com",
+                    "https://daily-cloudcode-pa.sandbox.googleapis.com",
                   ];
 
                   let gotRes: Response | null = null;
                   for (const ep of endpoints) {
                     const transformedUrl = `${ep}/v1internal:${action}${isStreaming ? "?alt=sse" : ""}`;
-                    const r = await fetch(transformedUrl, {
-                      ...init,
-                      headers,
-                      body: wrappedBody,
-                    });
-                    if (r.ok) {
-                      gotRes = r;
-                      break;
-                    }
-                    if (r.status === 429) {
-                      gotRes = r;
+                    try {
+                      const r = await fetch(transformedUrl, {
+                        ...init,
+                        headers,
+                        body: wrappedBody,
+                      });
+                      if (r.ok) {
+                        gotRes = r;
+                        break;
+                      }
+                      if (r.status === 429) {
+                        gotRes = r;
+                      }
+                    } catch (netErr) {
+                      console.warn(`[superoc] Endpoint ${ep} socket/network error:`, netErr);
                     }
                   }
 

@@ -296,7 +296,7 @@ export async function refreshAntigravityAccessToken(refreshTokenKey: string): Pr
       projectId,
     };
   } catch (err) {
-    console.error("[superoc] Error refreshing Antigravity access token:", err);
+    console.error("[superoc] Network/SSL Error refreshing Antigravity access token:", err);
     return null;
   }
 }
